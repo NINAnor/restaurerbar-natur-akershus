@@ -1,0 +1,183 @@
+---
+title: "artsobservasjoner"
+format: html
+---
+
+Klargjører ulike sett med artsobservasjonsdata.
+
+```{r, echo=FALSE, results='hide'}
+
+# Sett tegnkodingen for teksthåndtering til norsk bokmål med UTF-8-encoding
+Sys.setlocale("LC_CTYPE", "nb_NO.UTF-8")
+
+# Last inn pakker
+packages <- c("readxl","readr","dplyr","sf", "mapview", "terra")
+sapply(packages, require, character.only = TRUE)
+```
+
+## Artsobservasjoner
+
+Hentet fra Artskart 27.02.2026.
+
+Artsgrupper: karplanter, sopper, lav, moser Årstall: fra og med år 2000 Koordinatpresisjon 100 m. Område: Akershus + x km buffer/omriss for å fange opp observasjoner langs grensene
+
+```{r}
+# Mappe med filer
+path <- "/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Data/Artsobservasjoner/Input_filer"
+
+# Finn alle CSV-filer
+filer <- list.files(path = path, pattern = "\\.csv$", full.names = TRUE)
+
+# Les og slå sammen
+artsobs <- filer %>%
+  lapply(function(fil) {
+    read_csv2(
+      fil,
+      col_types = cols(.default = col_character())
+    ) %>%
+      mutate(kilde_fil = basename(fil))
+  }) %>%
+  bind_rows() %>%
+  type_convert(locale = locale(decimal_mark = ","))
+
+
+```
+
+## Fremmedarter
+
+Kun karplanter med økologisk effekt.
+
+```{r}
+
+fremmedartsbasen <- read_excel("/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Data/Artslister/Fremmedartsbasen2023 karplanter.xlsx")
+
+# Kun arter med økologisk effekt (liten=2, middels=3, stor=4)
+fremmed_oekoeffekt <- fremmedartsbasen %>%
+  filter(skar__kologisk_effekt > 1)
+
+# Filtrer artsobservasjoner
+artsobs_fremmed <- artsobs %>%
+  # Hent ut artene
+  filter(validScientificNameId %in% fremmedartsbasen$vitenskapelig_navn_id) %>%
+  # Filtrer usikkerheten slik at den kun inkluderer observasjoner med 10 m eller mindre i usikkerhet
+  filter(coordinateUncertaintyInMeters <= 10) %>%
+  # Filtrer etter år slik at kun de siste 10 årene med observasjoner inkluderes
+  mutate(
+    dateLastIdentified = as.POSIXct(dateLastIdentified, format = "%d.%m.%Y %H:%M:%S")
+  ) %>%
+  filter(format(dateLastIdentified, "%Y") >= "2016")
+
+# Gjør om til et romlig objekt
+artsobs_fremmed_sp <- artsobs_fremmed %>%
+  st_as_sf(coords = c("longitude", "latitude"), crs = 4326) %>%
+  # Konverter til EPSG: 25832
+  st_transform(25832) %>%
+  mutate(
+    X_32 = st_coordinates(.)[,1],
+    Y_32 = st_coordinates(.)[,2]
+  )
+
+# Eksporter
+artsobs_fremmed_sp %>% st_write("/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Data/Artsobservasjoner/Fremmedarter/artsobs_fremmed.csv")
+```
+
+## Gran
+
+```{r}
+# Filtrer artsobservasjoner
+artsobs_gran <- artsobs %>%
+  # Søker etter de som inneholder Picea abies (gran) for å også inkludere underart
+  filter(grepl("Picea abies", validScientificName)) %>%
+  # Filtrer usikkerheten slik at den kun inkluderer observasjoner med 10 m eller mindre i usikkerhet
+  filter(coordinateUncertaintyInMeters <= 10)
+
+# Gjør om til et romlig objekt
+artsobs_gran_sp <- artsobs_gran %>%
+  st_as_sf(coords = c("longitude", "latitude"), crs = 4326) %>%
+  # Konverter til EPSG: 25832
+  st_transform(25832) %>%
+  mutate(
+    X_32 = st_coordinates(.)[,1],
+    Y_32 = st_coordinates(.)[,2]
+  )
+
+# Eksporter
+artsobs_gran_sp %>% st_write("/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Data/Artsobservasjoner/Fremmedarter/artsobs_gran.csv")
+```
+
+## Indikatorarter
+
+### Barskog
+
+```{r}
+indikatorarter_barskog <- read_excel("/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Data/Artslister/Artslister_indikatorer_skog.xlsx", sheet="Eldre barskog")
+
+# Filtrer artsobservasjoner
+artsobs_barskog <- artsobs %>%
+  filter(validScientificName %in% indikatorarter_barskog$validScientificName) %>%
+  # Filtrer usikkerheten slik at den kun inkluderer observasjoner med 10 m eller mindre i usikkerhet
+  filter(coordinateUncertaintyInMeters <= 10) 
+
+# Gjør om til et romlig objekt
+artsobs_barskog_sp <- artsobs_barskog %>%
+  st_as_sf(coords = c("longitude", "latitude"), crs = 4326) %>%
+  # Konverter til EPSG: 25832
+  st_transform(25832) %>%
+  mutate(
+    X_32 = st_coordinates(.)[,1],
+    Y_32 = st_coordinates(.)[,2]
+  )
+
+# Eksporter
+artsobs_barskog_sp %>% st_write("/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Data/Artsobservasjoner/Indikatorarter/artsobs_barskog.csv")
+```
+
+### Osp
+
+```{r}
+indikatorarter_osp <- read_excel("/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Data/Artslister/Artslister_indikatorer_skog.xlsx", sheet="Osp")
+
+# Filtrer artsobservasjoner
+artsobs_osp <- artsobs %>%
+  filter(validScientificName %in% indikatorarter_osp$validScientificName)  %>%
+  # Filtrer usikkerheten slik at den kun inkluderer observasjoner med 10 m eller mindre i usikkerhet
+  filter(coordinateUncertaintyInMeters <= 10) 
+
+# Gjør om til et romlig objekt
+artsobs_osp_sp <- artsobs_osp %>%
+  st_as_sf(coords = c("longitude", "latitude"), crs = 4326) %>%
+  # Konverter til EPSG: 25832
+  st_transform(25832) %>%
+  mutate(
+    X_32 = st_coordinates(.)[,1],
+    Y_32 = st_coordinates(.)[,2]
+  )
+
+# Eksporter
+artsobs_osp_sp %>% st_write("/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Data/Artsobservasjoner/Indikatorarter/artsobs_osp.csv")
+```
+
+### Edellauvskog
+
+```{r}
+indikatorarter_edellauv <- read_excel("/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Data/Artslister/Artslister_indikatorer_skog.xlsx", sheet="Edellauvskog")
+
+# Filtrer artsobservasjoner
+artsobs_edellauv <- artsobs %>%
+  filter(validScientificName %in% indikatorarter_edellauv$validScientificName)  %>%
+  # Filtrer usikkerheten slik at den kun inkluderer observasjoner med 10 m eller mindre i usikkerhet
+  filter(coordinateUncertaintyInMeters <= 10) 
+
+# Gjør om til et romlig objekt
+artsobs_edellauv_sp <- artsobs_edellauv %>%
+  st_as_sf(coords = c("longitude", "latitude"), crs = 4326) %>%
+  # Konverter til EPSG: 25832
+  st_transform(25832) %>%
+  mutate(
+    X_32 = st_coordinates(.)[,1],
+    Y_32 = st_coordinates(.)[,2]
+  )
+
+# Eksporter
+artsobs_edellauv_sp %>% st_write("/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Data/Artsobservasjoner/Indikatorarter/artsobs_edellauv.csv")
+```
