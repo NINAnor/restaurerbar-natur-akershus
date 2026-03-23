@@ -1,0 +1,39 @@
+---
+title: "hogstflater"
+format: html
+---
+
+```{r, echo=FALSE, results='hide'}
+
+# Sett tegnkodingen for teksthåndtering til norsk bokmål med UTF-8-encoding
+Sys.setlocale("LC_CTYPE", "nb_NO.UTF-8")
+
+# Last inn pakker
+packages <- c("dplyr","sf", "mapview", "terra")
+sapply(packages, require, character.only = TRUE)
+```
+
+```{r}
+
+akershus <- st_read("/data/R/GeoSpatialData/AdministrativeUnits/Norway_AdministrativeUnits/Original/Norway_County/versjon2024/Administrative_enheter_fylker_2024_FGDB-format/Basisdata_32_Akershus_25832_Fylker2024_FGDB.gdb", layer="fylke")
+
+# Mange kart er for hele Norge, og vi trenger kun å prosessere data for Akershus
+askershusbbox <- st_bbox(akershus) %>%
+  st_as_sfc() %>%
+  st_transform(25833) %>%
+  vect()
+
+hogst_satellitt <- rast("/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Data/Hogstflater/naturskog_v1_støttelag_hogst_satelitt.tif")
+
+# Crop ned til Akershus
+hogst_satellitt <- crop(hogst_satellitt,askershusbbox)
+
+# Sett områder med hogst før 1995 til NA
+hogst_satellitt[hogst_satellitt < 1995] <- NA
+
+# Transformer til riktig koordinatsystem
+hogst_satellitt <- project(hogst_satellitt, "epsg:25832")
+
+# Eksporter
+writeRaster(hogst_satellitt, "/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Data/Hogstflater/hogst_satellitt_32.tif")
+```
