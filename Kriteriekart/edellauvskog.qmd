@@ -3,3 +3,266 @@ title: "edellauvskog"
 format: html
 ---
 
+```{r, echo=FALSE, results='hide'}
+
+# Sett tegnkodingen for teksthåndtering til norsk bokmål med UTF-8-encoding
+Sys.setlocale("LC_CTYPE", "nb_NO.UTF-8")
+
+# Last inn pakker
+packages <- c("dplyr","sf", "mapview", "terra")
+sapply(packages, require, character.only = TRUE)
+```
+
+## Last inn og klargjør data
+
+Datakildene som brukes:
+
+-   GreenPlan edellauvskog
+
+-   SRV lauvskog og blandingsskog
+
+-   Hogstflatekart
+
+-   Grått areal kart
+
+-   Kartlagte naturtyper (MI og HB13)
+
+-   Artsobservasjoner
+
+### Akershus grenser
+
+```{r}
+akershus <- st_read("/data/R/GeoSpatialData/AdministrativeUnits/Norway_AdministrativeUnits/Original/Norway_County/versjon2024/Administrative_enheter_fylker_2024_FGDB-format/Basisdata_32_Akershus_25832_Fylker2024_FGDB.gdb", layer="fylke")
+
+# Mange kart er for hele Norge, og vi trenger kun å prosessere data for Akershus
+askershusbbox_32 <- st_bbox(akershus) %>%
+  st_as_sfc() 
+askershusbbox <- askershusbbox_32 %>%
+    st_transform(25833)
+
+askershusbbox_32 <- vect(askershusbbox_32)
+askershusbbox <- vect(askershusbbox)
+```
+
+### GreenPlan edellauvskog
+
+```{r}
+gp_edellauvskog <- rast("/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Data/Skog/Edellauvskog Greenplan/Edellauvskog_forekomst(x10,000)_norway_2023_100m.tif")
+
+# Klipp til Akershus
+gp_edellauvskog <- crop(gp_edellauvskog,askershusbbox)
+```
+
+### SR16 V lauvskog og blandingsskog
+
+```{r}
+lauvskog <- st_read(
+  "/data/R/GeoSpatialData/LandCover/Norway_ForestResources_SR16_NIBIO/Original/32_25832_SR16_GDB/32_25832_SR16_GDB.gdb",
+  # Filtrer for å kun få ut lauvskog og blandingsskog (4=blanding, 5=lauvdominert)
+  query = "SELECT * FROM SkogressursFlate WHERE srtreslagsam IN (4,5)"
+) #%>%
+  #st_transform(25832)
+```
+
+### Kartlagte naturtyper (MI og HB13)
+
+```{r}
+HB13 <- st_read("/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Data/Kartlagte naturtyper/Input_filer/Naturtyper_hb13_32_akershus_25832_FILEGDB.gdb",
+                  layer="Naturtyper_hb13_32_akershus") %>%
+  # Tre typer som er edellauvskog
+  filter(naturtype %in% c("F01","F02","F15"))
+
+
+MI <- st_read("/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Data/Kartlagte naturtyper/Input_filer/Naturtyper_nin_32_akershus_25832_FILEGDB.gdb",
+                  layer="naturtyper_nin_omr") %>%
+  filter(grepl("edellauv",naturtype))
+```
+
+### Observasjoner av indikatorarter for edellauvskog
+
+```{r}
+edellauv_arter <- read_csv("/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Data/Artsobservasjoner/Indikatorarter/artsobs_edellauv.csv") %>%
+   st_as_sf(coords = c("X_32", "Y_32"), crs = 25832) 
+```
+
+### Observasjoner av fremmedarter og gran
+
+```{r}
+fremmedarter <- read_csv("/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Data/Artsobservasjoner/Fremmedarter/artsobs_fremmed.csv") %>%
+   st_as_sf(coords = c("X_32", "Y_32"), crs = 25832) 
+gran <- read_csv("/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Data/Artsobservasjoner/Fremmedarter/artsobs_gran.csv") %>%
+   st_as_sf(coords = c("X_32", "Y_32"), crs = 25832) 
+
+fremmedarter_gran <- rbind(fremmedarter, gran)
+
+```
+
+### Skogalder
+
+```{r}
+skogalder <- rast("/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2025/Kartlegging/Data_Akershus/SR16_utm32.gdb", subds ="sr16beta_32_SRRTREALDER_band1")
+
+# Fiks NA verdier
+NAflag(skogalder) <- 32767
+
+# Klipp til Akershus
+skogalder <- crop(skogalder, askershusbbox_32)
+
+```
+
+### Hogstflatekart
+
+```{r}
+
+# Trenger UTM 32
+hogst_satellitt <- rast("/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Data/Hogstflater/hogst_satellitt_32.tif")
+
+```
+
+### Grått areal kart
+
+```{r}
+
+graatt_areal <- st_read("/data/R/GeoSpatialData/LandCover/Norway_Grå_Arealer_versjon1/Original/Kart over grå arealer GeoPackage-format/32_25835_graastruktur_gpkg.gpkg") %>%
+  st_transform(25832)
+
+```
+
+## Edellauvskog etter GreenPlan-modell
+
+```{r}
+gp_edellauvskog_v <- extract(gp_edellauvskog, lauvskog, fun=mean, na.rm=TRUE)
+
+edellauvskog_v <- lauvskog %>%
+  st_as_sf()%>%
+  mutate(gp_edellauvskog=gp_edellauvskog_v[,2]) %>%
+  select(gid, gp_edellauvskog)
+
+```
+
+Hent ut verdier også for HB13 og MI for å sette en terskelverdi for om noe er edellauvskog eller ikke.
+
+```{r}
+HB13_edellauvskog <- extract(gp_edellauvskog, HB13, fun=mean, na.rm=TRUE)
+HB13_edellauvskog_gp <- HB13 %>%
+  st_as_sf()%>%
+  mutate(gp_edellauvskog=HB13_edellauvskog[,2]) %>%
+  select(registreringsdato, bmVerdi, gp_edellauvskog)
+
+MI_edellauvskog <- extract(gp_edellauvskog, MI, fun=mean, na.rm=TRUE)
+MI_edellauvskog_gp <- MI %>%
+  st_as_sf()%>%
+  mutate(gp_edellauvskog=MI_edellauvskog[,2]) %>%
+  select(kartleggingsår, tilstand, gp_edellauvskog)
+
+# Kun de som er kartlagt relativt nært 2023 (året som representerer GreenPlan kartet)
+# I tillegg kun de i god tilstand
+MI_edellauvskog_gpf <- MI_edellauvskog_gp %>%
+  filter(tilstand == "god",
+         kartleggingsår > 2021)
+
+# Setter terskelverdien for de øverste verdiene 
+terskel <- quantile(MI_edellauvskog_gpf$gp_edellauvskog, prob=0.95)[[1]]
+
+# Bruk terskelverdien
+edellauvskog_gp <- edellauvskog_v %>%
+  filter(gp_edellauvskog >= terskel)
+
+```
+
+## Edellauvskog etter artsobservasjoner
+
+Bruker indikatorarter for edellauvskog. Hvis en SR16 V lauvskog/blandingsskog polygon har en indikatorart i seg, så sier vi at polygonen er edellauvskog.
+
+Først, finn de polygonene som har indikatorarter i seg.
+
+```{r}
+edellauv_skog <- mask(vect(lauvskog), vect(edellauv_arter))
+```
+
+Deretter klipp laget etter hogst og nedbygging (grå arealer).
+
+```{r}
+# Hogst
+hogst_satellitte <- ifel(!is.na(hogst_satellitt), 1, NA)
+hogst_satellittv <- as.polygons(hogst_satellitte, dissolve = TRUE)
+edellauv_skog <- erase(edellauv_skog, hogst_satellittv)
+
+# Grå arealer
+edellauv_skog <- erase(edellauv_skog, vect(graatt_areal))
+```
+
+Noen arealer kan ha blitt fjernet, så kjører derfor en ny overlapp med indikatorartene.
+
+```{r}
+edellauv_skog <- mask(edellauv_skog, vect(edellauv_arter))
+edellauv_skog <- st_as_sf(edellauv_skog)
+
+edellauv_arter_skog <-  mask(vect(edellauv_arter), vect(edellauv_skog))
+edellauv_arter_skog <- st_as_sf(edellauv_arter_skog)
+
+edellauvsskog_artsobs <- st_join(edellauv_skog, edellauv_arter) %>%
+  group_by(gid) %>%   # bytt til riktig ID-kolonne i polygonet
+  summarise(
+    n_obs = n(),
+    n_arter = n_distinct(preferredPopularName),
+    arter = paste(unique(preferredPopularName), collapse = ", ")
+  )
+
+```
+
+## Edellauvskog med forbedringspotensial
+
+Sjekker to typer:
+
+-   SR16 beta alder
+
+-   Tilstedeværelse av fremmedarter og gran
+
+```{r}
+# Vil også inkludere de som ikke har fremmedarter, så her filtrerer vi først bort de fremmedartsobservasjonene som ikke er i en edellauvskog-polygon
+edellauv_skog_arter_fp <-  mask(vect(fremmedarter_gran), vect(edellauv_skog))
+edellauv_skog_arter_fp <- st_as_sf(edellauv_skog_arter_fp)
+
+edellauvsskog_artsobs <- st_join(edellauv_skog, edellauv_skog_arter_fp) %>%
+   group_by(gid) %>%   # bytt til riktig ID-kolonne i polygonet
+   summarise(
+     fremmed_n_obs = n(),
+     fremmed_n_arter = n_distinct(preferredPopularName),
+     fremmed_arter = paste(unique(preferredPopularName), collapse = ", "),
+   ) %>%
+  mutate(fremmed_n_obs = ifelse(fremmed_arter=="NA",0,fremmed_n_obs),
+         fremmed_n_arter =  ifelse(fremmed_arter=="NA",0,fremmed_n_arter)
+         )  %>%
+  # Legg til informasjon om indikatorarter
+  left_join(edellauvsskog_artsobs %>% st_drop_geometry(),
+            by="gid")
+
+#mapview(edellauvsskog_artsobs, zcol="fremmed_n_arter")
+```
+
+```{r}
+
+edellauvsskog_artsobsv <- vect(edellauvsskog_artsobs)
+
+edellauvsskog_alder <- extract(skogalder, edellauvsskog_artsobsv, fun=mean, na.rm=TRUE)
+edellauvsskog_artsobs_alder <- edellauvsskog_artsobsv %>%
+  st_as_sf()%>%
+  mutate(alder=edellauvsskog_alder[,2]) %>%
+  # Fjern de som er under 40 år
+  filter(alder >= 40)
+
+#mapview(edellauvsskog_artsobs_alder, zcol="fremmed_n_arter")
+```
+
+## Eksporter
+
+```{r}
+temp_file <- "~/Mounts/scratch/tmp_ida/gpkg/edellauvskog.gpkg" 
+final_file <- "/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Kriteriekart/edellauvskog.gpkg" 
+st_write(edellauvsskog_artsobs_alder, temp_file, layer = "edellauvskog", append=F)
+st_write(, temp_file, layer = "MI_edellauvskog", append=F)
+st_write(, temp_file, layer = "HB13_edellauvskog", append=F)
+
+file.copy(temp_file, final_file, overwrite = TRUE)
+```
