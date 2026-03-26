@@ -60,12 +60,12 @@ artsobs_fremmed <- artsobs %>%
   # Hent ut artene
   filter(validScientificNameId %in% fremmedartsbasen$vitenskapelig_navn_id) %>%
   # Filtrer usikkerheten slik at den kun inkluderer observasjoner med 10 m eller mindre i usikkerhet
-  filter(coordinateUncertaintyInMeters <= 10) %>%
+  #filter(coordinateUncertaintyInMeters <= 10) %>%
   # Filtrer etter år slik at kun de siste 10 årene med observasjoner inkluderes
   mutate(
-    dateLastIdentified = as.POSIXct(dateLastIdentified, format = "%d.%m.%Y %H:%M:%S")
+    dateTimeCollected = as.POSIXct(dateTimeCollected, format = "%d.%m.%Y %H:%M:%S")
   ) %>%
-  filter(format(dateLastIdentified, "%Y") >= "2016")
+  filter(format(dateTimeCollected, "%Y") >= "2016")
 
 # Gjør om til et romlig objekt
 artsobs_fremmed_sp <- artsobs_fremmed %>%
@@ -87,9 +87,9 @@ artsobs_fremmed_sp %>% st_write("/data/P-Prosjekter2/155014_restaurerbar_natur_a
 # Filtrer artsobservasjoner
 artsobs_gran <- artsobs %>%
   # Søker etter de som inneholder Picea abies (gran) for å også inkludere underart
-  filter(grepl("Picea abies", validScientificName)) %>%
+  filter(grepl("Picea abies", validScientificName)) #%>%
   # Filtrer usikkerheten slik at den kun inkluderer observasjoner med 10 m eller mindre i usikkerhet
-  filter(coordinateUncertaintyInMeters <= 10)
+  #filter(coordinateUncertaintyInMeters <= 10)
 
 # Gjør om til et romlig objekt
 artsobs_gran_sp <- artsobs_gran %>%
@@ -102,7 +102,33 @@ artsobs_gran_sp <- artsobs_gran %>%
   )
 
 # Eksporter
-artsobs_gran_sp %>% st_write("/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Data/Artsobservasjoner/Fremmedarter/artsobs_gran.csv")
+artsobs_gran_sp %>% st_write("/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Data/Artsobservasjoner/Fremmedarter/artsobs_gran.csv", append=F)
+```
+
+## Rødlistede arter
+
+Rødlistede arter er kun karplanter.
+
+```{r}
+RLcat <- c("DD", "NT", "VU", "EN", "CR", "RE")
+
+artsobs_RLarter <- artsobs %>%
+  filter(category %in% RLcat,
+         # Kun karplanter
+         taxonGroupName == "Karplanter")
+
+# Gjør om til et romlig objekt
+artsobs_RLarter_sp <- artsobs_RLarter %>%
+  st_as_sf(coords = c("longitude", "latitude"), crs = 4326) %>%
+  # Konverter til EPSG: 25832
+  st_transform(25832) %>%
+  mutate(
+    X_32 = st_coordinates(.)[,1],
+    Y_32 = st_coordinates(.)[,2]
+  )
+
+# Eksporter
+artsobs_RLarter_sp %>% st_write("/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Data/Artsobservasjoner/Roedlistede arter/artsobs_RLarter.csv")
 ```
 
 ## Indikatorarter
