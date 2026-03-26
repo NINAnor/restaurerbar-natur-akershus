@@ -1,0 +1,125 @@
+---
+title: "Bekkeåpninger"
+author: "Jenny Hansen"
+format: html
+editor: visual
+---
+
+Load required libraries
+
+```{r echo=FALSE}
+library(dplyr)
+library(sf)
+library(duckdb)
+library(DBI)
+```
+
+Register data with duckdb
+
+```{r echo=FALSE}
+
+con <- dbConnect(duckdb())
+dbExecute(con, "INSTALL spatial FROM core_nightly; LOAD spatial;")
+
+# bekk
+dbExecute(con, "
+  CREATE TABLE bekk AS
+  SELECT *
+  FROM ST_Read('/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Data/Kantsoner/FKB-Vann_Akershus.gpkg', layer = 'fkbvann')
+  WHERE objtype = 'ElvBekk'
+    AND medium = 'U'
+")
+
+# Åker
+dbExecute(con, "
+  CREATE TABLE aker AS
+    SELECT 
+    ST_MakeValid(SHAPE) AS geom,
+    * EXCLUDE (SHAPE)
+  FROM ST_Read('/data/R/GeoSpatialData/Topography/Norway_FKB/Original/FKB-AR5 FGDB-format/Basisdata_32_Akershus_25832_FKB-AR5_FGDB.gdb', layer='fkb_ar5_omrade')
+  WHERE arealtype IN ('21', '22', '23')
+    AND arealtype IS NOT NULL
+")
+
+
+#gråareal
+dbExecute(con, "
+  CREATE TABLE ga AS
+  SELECT ST_Transform(geom, 'EPSG:25833', 'EPSG:25832') AS geom, *
+  EXCLUDE geom
+  FROM ST_Read('/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Data/Kantsoner/32_25835_graastruktur_gpkg.gpkg', layer='GraaArealFlate')
+")
+
+# check that they are correctly registered
+dbGetQuery(con, "PRAGMA table_info('aker')")
+dbGetQuery(con, "PRAGMA table_info('ga')")
+dbGetQuery(con, "PRAGMA table_info('bekk')")
+
+```
+
+Identify bekk segments overlapping åker and gråareal and remove them
+
+```{r echo=FALSE}
+
+# remove areas overlapping åker
+dbExecute(con, "
+  CREATE OR REPLACE TABLE bekk_no_aker AS
+  SELECT 
+    b.* EXCLUDE (geom),
+    CASE 
+      WHEN a.geom IS NULL THEN b.geom
+      ELSE ST_Difference(b.geom, a.geom)
+    END AS geom
+  FROM bekk b
+  LEFT JOIN aker a
+  ON ST_Intersects(b.geom, a.geom)
+")
+
+# remove areas overlapping gråareal
+dbExecute(con, "
+  CREATE OR REPLACE TABLE bekk_clean AS
+  SELECT 
+    b.* EXCLUDE (geom),
+    CASE 
+      WHEN g.geom IS NULL THEN b.geom
+      ELSE ST_Difference(b.geom, g.geom)
+    END AS geom
+  FROM bekk_no_aker b
+  LEFT JOIN ga g
+  ON ST_Intersects(b.geom, g.geom)
+")
+
+# read results back into r
+bekk_clean_df <- dbGetQuery(con, "
+  SELECT *, ST_AsWKB(geom) AS geom_wkb
+  FROM bekk_clean
+")
+
+# convert to geometry
+bekk_clean_sf <- dbGetQuery(con, "
+  SELECT ST_AsWKB(geom) AS geom_wkb, *
+  FROM bekk_clean
+") %>%
+  filter(sapply(geom_wkb, is.raw)) %>%
+  mutate(geometry = st_as_sfc(geom_wkb, crs = 25832)) %>%
+  select(-geom, -geom_wkb) %>%
+  st_sf() %>% 
+  st_zm() %>% 
+  filter(!st_is_empty(geometry))
+```
+
+Export
+
+```{r echo=FALSE}
+
+# write to scratch temporarily and copy to P drive
+out_gpkg <- "/data/scratch/tmp_jenny/gpkg/bekkapninger.gpkg"
+st_write(bekk_clean_sf, out_gpkg, layer = "bekkapninger")
+
+
+file.copy(
+  from = out_gpkg,
+  to = "/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Kriteriekart/bekkapninger.gpkg",
+  overwrite = TRUE)
+
+```

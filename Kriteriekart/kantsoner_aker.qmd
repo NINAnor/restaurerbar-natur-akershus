@@ -1,0 +1,96 @@
+---
+title: "Kantsoner langs åker"
+format: html
+editor: visual
+---
+
+Load required libraries
+
+```{r echo=FALSE}
+library(sf)
+library(terra)
+library(dplyr)
+library(mapview)
+library(rmapshaper)
+```
+
+Import data
+
+```{r echo=FALSE}
+
+# AR5 polygons
+ar5 <- st_read("/data/R/GeoSpatialData/Topography/Norway_FKB/Original/FKB-AR5 FGDB-format/Basisdata_32_Akershus_25832_FKB-AR5_FGDB.gdb", layer = "fkb_ar5_omrade")
+
+# Pollinator prediction raster
+poll <- rast("/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Data/Kantsoner/polliland_akershus.tif")
+
+# Gråareal
+ga <- st_read("/data/R/GeoSpatialData/LandCover/Norway_Grå_Arealer_versjon1/Original/Kart over grå arealer GeoPackage-format/32_25835_graastruktur_gpkg.gpkg", layer = "GraaArealFlate") %>% 
+  st_transform(25832)
+
+# jordkvalitet
+jk <- st_read("/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Data/Kantsoner/jordkvalitet.gpkg", layer = "jordkvalitet") # 1 = svært god, 2 = god, 3 = mindre god
+
+```
+
+Reclassify AR5
+
+```{r}
+
+# classify fulldyrka jord and overflatedyrka jord as åker
+# everything else as NA
+ar5 <- ar5 %>%
+  mutate(kantklasse = if_else(arealtype %in% c("21", "22", "23"), "Aker", NA_character_)) %>%
+  filter(!is.na(kantklasse)) %>% 
+  st_make_valid
+
+# dissolve into a single geometry
+aker <- ar5 %>% 
+  summarize()
+```
+
+Buffer polygons and get difference
+
+```{r}
+
+aker_buff <- aker %>% 
+  st_buffer(15)
+
+aker_kant <- ms_erase(aker_buff, aker)
+```
+
+Remove grey area
+
+```{r}
+
+aker_kant_no_ga <- ms_erase(aker_kant, ga) %>% 
+  st_make_valid()
+
+```
+
+Rasterize and get pollinator values
+
+```{r}
+
+kant_vect <- vect(aker_kant_no_ga)
+
+kant_rast <- rasterize(kant_vect, poll, field = 1, background = 0,
+                       touches = TRUE)
+
+kant_poll <- ifel(kant_rast == 1, poll, NA)
+```
+
+Rasterize jordkvalitet
+
+```{r}
+
+# NB: this is only capturing field margins, so not likely representative of greater soil quality of the field- need to re-think the approach (there is no category 3 here)
+jk_vect <- vect(jk)
+
+jk_rast <- rasterize(jk_vect, poll, field = "jordkvalitet", touches = TRUE, fun = "max")
+
+kant_jk <- ifel(kant_rast == 1, jk_rast, NA)
+
+```
+
+Where jordkvalitet = 2 and polinator high

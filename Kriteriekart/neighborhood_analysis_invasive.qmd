@@ -1,0 +1,90 @@
+---
+title: "Neighborhood Analysis Invasive Species"
+author: "Jenny Hansen"
+format: html
+editor: visual
+---
+
+Load required libraries
+
+```{r echo=FALSE}
+
+library(dplyr)
+library(sf)
+library(terra)
+library(rgrass)
+
+# connect to GRASS
+NinaR::grassConnect(location = "ETRS_32N", mapset = "p_Restaurerbar_Akershus")
+
+```
+
+Import data
+
+```{r echo=FALSE}
+
+# Akershus fylke
+akershus <- st_read("/data/R/GeoSpatialData/AdministrativeUnits/Norway_AdministrativeUnits/Original/Norway_County/versjon2024/Administrative_enheter_fylker_2024_FGDB-format/Basisdata_32_Akershus_25832_Fylker2024_FGDB.gdb", layer = "fylke")
+write_VECT(vect(akershus), "akershus_vect")
+
+# invasive spp.
+invasive_spp <- read.csv("/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Data/Artsobservasjoner/Fremmedarter/artsobs_fremmed.csv") %>% 
+  filter(county == "Akershus") %>% 
+  st_as_sf(coords = c("X_32", "Y_32"), crs = 25832)
+write_VECT(vect(invasive_spp), "invasive_vect", flags = "overwrite")
+```
+
+Set up GRASS environment
+
+```{r echo=FALSE}
+
+execGRASS("g.region", vector = "akershus_vect", flags = "p", res = "10")
+execGRASS("g.remove", type = "raster", name = "MASK", flags = "f")
+
+```
+
+Rasterize invasive species
+
+```{r echo=FALSE}
+
+# rasterize features
+execGRASS("v.to.rast",
+          input = "invasive_vect",
+          output = "invasive_rast",
+          use = "val",
+          value = 1,
+          type = "point", 
+          flags = c("overwrite", "quiet"))
+
+# ensure NULL is 0 
+execGRASS(
+  "r.mapcalc",
+  flags = c("overwrite", "quiet"),
+  expression = "invasive_rast = if(isnull(invasive_rast), 0, 1)"
+)
+```
+
+Moving window neighborhood analysis
+
+```{r echo=FALSE}
+
+# using a 9-cell (3x3) window
+execGRASS("r.neighbors",
+          input = "invasive_rast",
+          output = "invasive_rast_sum",
+          method = "sum",
+          size = 3,
+          flags = c("overwrite", "quiet"))
+
+```
+
+Apply mask and import/write
+
+```{r echo=FALSE}
+
+execGRASS("r.mask", vector = "akershus_vect")
+
+invasive_neighborhood <- read_RAST("invasive_rast_sum")
+plot(invasive_neighborhood) # max 4/cell
+writeRaster(invasive_neighborhood, "/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Data/Kantsoner/invasive_neighborhood.tif")
+```

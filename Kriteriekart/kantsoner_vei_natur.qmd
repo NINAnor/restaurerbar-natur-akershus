@@ -1,0 +1,97 @@
+---
+title: "Kantsoner mellom vei og natur"
+author: "Jenny Hansen"
+format: html
+editor: visual
+---
+
+Load required libraries
+
+```{r echo=FALSE}
+library(sf)
+library(terra)
+library(dplyr)
+library(mapview)
+
+```
+
+Import data
+
+```{r echo=FALSE}
+
+# veier
+veier <- st_read("/data/R/GeoSpatialData/Topography/Norway_N50/Original/N50 Kartdata FGDB-format/Basisdata_32_Akershus_25832_N50Kartdata_FGDB/Basisdata_32_Akershus_25832_N50Kartdata_FGDB.gdb", layer = "N50_Samferdsel_senterlinje") %>% 
+  filter(typeveg == "enkelBilveg") %>% 
+  mutate(road_id = row_number()) # assign unique id (missing objectid)
+
+# natural land cover (arealtype is skog, åpenfastmark, myr or ferskvann)
+natur <- st_read("/data/R/GeoSpatialData/Topography/Norway_FKB/Original/FKB-AR5 FGDB-format/Basisdata_32_Akershus_25832_FKB-AR5_FGDB.gdb", layer = "fkb_ar5_omrade") %>% 
+  filter(arealtype %in% c("30", "50", "60", "81"))
+
+
+# Canopy Height Model classification was done in Google Earth Engine:
+# https://code.earthengine.google.com/bae90ed14775ac4adac711981634e6e4
+
+chm_bin <- rast("/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Data/Kantsoner/akershus_chm_binary_10m.tif")
+```
+
+Find road segments that overlap natural land cover types
+
+```{r echo=FALSE}
+
+# buffer natural areas by 10 m
+natur_buf <- natur %>% st_buffer(10)
+
+# intersect with roads
+vei_nat_part <- st_intersection(veier, natur_buf)
+
+vei_nat_len <- vei_nat_part %>%
+  mutate(len_nat = st_length(.)) %>%
+  group_by(road_id) %>%  
+  summarise(len_nat = sum(len_nat))
+
+# get total length of all roads
+vei_total_len <- veier %>%
+  mutate(len_total = st_length(.)) %>%
+  select(road_id, len_total)
+
+# proportion of road along nature
+vei_prop <- vei_total_len %>%
+  st_drop_geometry() %>% 
+  left_join(vei_nat_len %>% st_drop_geometry(), by = "road_id") %>%
+  mutate(len_nat = ifelse(is.na(len_nat), 0, len_nat),
+         prop_nat = as.numeric(len_nat) / as.numeric(len_total))
+
+# filter for segments with at least 75% natural
+veier_sel <- veier %>%
+  left_join(vei_prop, by = "road_id") %>%
+  filter(prop_nat >= 0.75)
+
+# buffer remaining segments by 20 m
+veier_buf <- veier_sel %>% st_buffer(20)
+
+```
+
+Find areas that overlap CHM raster with '1' values- less than 2 m vegetation
+
+```{r echo=FALSE}
+
+veier_natur_vect <- vect(veier_buf)
+
+# get proportion of cells with <= 2 m vegetation
+veier_natur_vect$veg_low_prop <- extract(chm_bin, veier_natur_vect, fun = mean, na.rm = TRUE)[,2]
+
+# filter for those that are at least 75% low vegetation
+veier_sel <- veier_natur_vect %>% st_as_sf() %>% filter(veg_low_prop > 0.75)
+mapview(veier_sel, zcol = "veg_low_prop") 
+
+# write to scratch temporarily and copy to P drive
+out_gpkg <- "/data/scratch/tmp_jenny/gpkg/kantsoner_vei_natur.gpkg"
+st_write(veier_sel, out_gpkg, layer = "kantsoner_vei_natur")
+
+
+file.copy(
+  from = out_gpkg,
+  to = "/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Kriteriekart/kantsoner_vei_natur.gpkg",
+  overwrite = TRUE)
+```

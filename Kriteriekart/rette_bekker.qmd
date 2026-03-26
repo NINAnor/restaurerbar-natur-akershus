@@ -1,0 +1,62 @@
+---
+title: "Rette bekker"
+author: "Jenny Hansen"
+format: html
+editor: visual
+---
+
+Load required libraries
+
+```{r echo=FALSE}
+
+library(dplyr)
+library(sf)
+library(readxl)
+library(mapview)
+
+```
+
+Import data
+
+```{r echo=FALSE}
+
+# Vann-Nett report of streams physically altered for agriculture or roads
+vann_nett <- read_excel("/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Data/Ferskvann/vannnett_eksport.xlsx") %>% 
+  filter(`Pressure type (pressures)` %in% c("Physical alteration for agriculture",
+                                            "Physical intervention road (road in watercourse, culvert, etc.)")) %>% 
+  rename(waterbody_id = `Waterbody id`) %>% 
+  group_by(waterbody_id) %>% 
+  slice(1) %>% 
+  ungroup()
+
+# Vannforekomster in Akershus
+vann_for <- st_read("/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Data/Ferskvann/Vannforekomster_32_akershus_25832_FILEGDB.gdb", layer = "VannforekomstElv")
+
+```
+
+Join geometry to vann_nett data
+
+```{r echo=FALSE}
+
+vann_sf <- vann_nett %>% 
+  left_join(vann_for, by = c("waterbody_id" = "identifikasjon_lokalId")) %>% 
+  st_as_sf(sf_column_name = "SHAPE", crs = 25832)
+
+mapview(vann_sf)
+```
+
+Export
+
+```{r echo=FALSE}
+
+# write to scratch temporarily and copy to P drive
+out_gpkg <- "/data/scratch/tmp_jenny/gpkg/rette_bekker.gpkg"
+st_write(vann_sf, out_gpkg, layer = "rette_bekker")
+
+
+file.copy(
+  from = out_gpkg,
+  to = "/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Kriteriekart/rette_bekker.gpkg",
+  overwrite = TRUE)
+
+```
