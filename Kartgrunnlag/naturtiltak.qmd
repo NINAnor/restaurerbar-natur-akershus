@@ -1,0 +1,68 @@
+---
+title: "naturtiltak"
+format: html
+---
+
+```{r}
+akershus <- st_read("/data/R/GeoSpatialData/AdministrativeUnits/Norway_AdministrativeUnits/Original/Norway_County/versjon2024/Administrative_enheter_fylker_2024_FGDB-format/Basisdata_32_Akershus_25832_Fylker2024_FGDB.gdb", layer="fylke")
+
+```
+
+```{r}
+punkt_url <- paste0(
+  # Alle punkter: 0
+  "https://kart3.miljodirektoratet.no/arcgis/rest/services/naturtiltak/naturtiltak/MapServer/0/query?",
+  "where=1%3D1&",
+  "outFields=*&",
+  "returnGeometry=true&",
+  "f=geojson"
+)
+
+punkt <- st_read(punkt_url, quiet = TRUE) %>%
+  st_transform(25832) %>%
+  # Velg kun de innenfor Akershus
+  st_filter(akershus, .predicate = st_within)
+
+linje_url <- paste0(
+  # Lokalt og regionalt: 2
+  "https://kart3.miljodirektoratet.no/arcgis/rest/services/naturtiltak/naturtiltak/MapServer/2/query?",
+  "where=1%3D1&",
+  "outFields=*&",
+  "returnGeometry=true&",
+  "f=geojson"
+)
+
+linje <- st_read(linje_url, quiet = TRUE) %>%
+  st_transform(25832) %>%
+  # Velg kun de innenfor Akershus
+  st_filter(akershus, .predicate = st_within)
+
+polygon_url <- paste0(
+  # Lokalt og regionalt: 5
+  "https://kart3.miljodirektoratet.no/arcgis/rest/services/naturtiltak/naturtiltak/MapServer/5/query?",
+  "where=1%3D1&",
+  "outFields=*&",
+  "returnGeometry=true&",
+  "f=geojson"
+)
+
+polygon <- st_read(polygon_url, quiet = TRUE) %>%
+  st_transform(25832) %>%
+  # Velg kun de innenfor Akershus
+  st_filter(akershus, .predicate = st_within)
+
+
+```
+
+## Eksporter
+
+```{r}
+temp_file <- "~/Mounts/scratch/tmp_ida/gpkg/naturtiltak.gpkg" 
+final_file <- "/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Tilleggsdata/naturtiltak.gpkg" 
+st_write(polygon, temp_file, layer = "naturtiltak_polygoner", append=F)
+st_write(linje, temp_file, layer = "naturtiltak_linjer", append=F)
+st_write(punkt, temp_file, layer = "naturtiltak_punkter", append=F)
+
+file.copy(temp_file, final_file, overwrite = TRUE)
+
+```
