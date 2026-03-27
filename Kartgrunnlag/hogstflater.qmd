@@ -32,8 +32,9 @@ hogst_satellitt <- crop(hogst_satellitt,askershusbbox)
 hogst_satellitt[hogst_satellitt < 1995] <- NA
 
 # Transformer til riktig koordinatsystem
-hogst_satellitt <- project(hogst_satellitt, "epsg:25832")
+hogst_satellitt32 <- project(hogst_satellitt, "epsg:25832")
 
 # Eksporter
-writeRaster(hogst_satellitt, "/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Data/Hogstflater/hogst_satellitt_32.tif")
+writeRaster(hogst_satellitt, "/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Data/Hogstflater/hogst_satellitt_33.tif")
+writeRaster(hogst_satellitt32, "/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Data/Hogstflater/hogst_satellitt_32.tif")
 ```
