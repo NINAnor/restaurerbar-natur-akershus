@@ -41,9 +41,9 @@ askershusbbox <- st_bbox(akershus) %>%
   st_transform(25833) %>%
   vect()
 
-# Testkommune: Hurdal
-Hurdal <- st_read("/data/R/GeoSpatialData/AdministrativeUnits/Norway_AdministrativeUnits/Original/Norway_Municipalities/versjon2025/Administrative enheter kommuner FGDB-format/Basisdata_0000_Norge_25833_Kommuner_FGDB/Basisdata_0000_Norge_25833_Kommuner_FGDB.gdb", layer="kommune") %>%
-  filter(kommunenavn == "Hurdal")
+# Testkommune: Nesodden og Frogn
+testkommuner <- st_read("/data/R/GeoSpatialData/AdministrativeUnits/Norway_AdministrativeUnits/Original/Norway_Municipalities/versjon2025/Administrative enheter kommuner FGDB-format/Basisdata_0000_Norge_25833_Kommuner_FGDB/Basisdata_0000_Norge_25833_Kommuner_FGDB.gdb", layer="kommune") %>%
+  filter(kommunenavn %in% c("Nesodden", "Frogn"))
 
 ```
 
@@ -93,39 +93,52 @@ graatt_areal <- st_read("/data/R/GeoSpatialData/LandCover/Norway_Grå_Arealer_ve
 
 ## Eldre barskog med forbedringspotensial
 
+Finn bestander med høy andel av naturskogsnærhet.
+
+Først fjerner vi områder som er hogget eller nedbygd. I tillegg fjerner vi de polygonene som er mindre enn 1000 m2.
+
 ```{r}
-# Test 2: bruk kun rasterverdier fra naturskogsnærhet for å finne områder
 
-# Masker ut områder som ikke er barskog i naturskogsnærhet-kartet
-eldrebarskogr <- mask(naturskogsnaerhet, barskog)
+# Denne tar lang tid å kjøre, så gjør det bare for testkommuner først
+naturskogsnaerhet <- crop(naturskogsnaerhet,testkommuner)
+barskog <- crop(barskog, testkommuner)
+hogst_satellitt <- mask(hogst_satellittv, vect(testkommuner))
 
-eldrebarskog_hurdal <- crop(eldrebarskogr, vect(Hurdal))
+# Fjern områder som er hogd de siste 30 årene
+hogst_satellitt <- mask(hogst_satellittv, vect(testkommuner))
+barskog <- erase(barskog, hogst_satellitt)
 
-#mapview(eldrebarskog_hurdal, maxpixels = 2273376)
+# Fjern områder som er nedbygd
+graatt_areal <- mask(vect(graatt_areal), vect(testkommuner))
+graatt_areal <- aggregate(graatt_areal)
+barskog <- erase(barskog, graatt_areal)
+
+# Splitt multipolygoner
+barskog <- disagg(barskog)
+
+# Fjern små områder for å unngå slivers
+barskog <- barskog %>%
+  st_as_sf() %>%
+  mutate(areal=as.numeric(st_area(geometry))) %>%
+  filter(areal >= 1000)
+
 ```
 
-## Områder som skal ekskluderes
-
-Arealer som er flatehogd eller har blitt nedbygd vil ikke inkluderes i det ferdige kartlaget. Områder som overlapper med kartlag for hogstflater og med grått areal, maskeres ut.
+For de resterende polygonene henter vi ut hvor mye naturskogsnærhet av kategori 3-5 som finnes i polygonene. Kun polygoner hvor minst 20 % av polygonenen har naturskogsnærhet 3-5 inkluderes videre.
 
 ```{r}
-### Raster
+eldrebarskog_v <- extract(naturskogsnaerhet, barskog, fun=sum, na.rm=TRUE)
+eldrebarskog_v <- barskog %>%
+  st_as_sf()%>%
+  mutate(naturskogsnaerhet_sum=eldrebarskog_v[,2]) %>%
+  select(naturskogsnaerhet_sum) %>%
+  # Fjern de som er NA
+  filter(!is.na(naturskogsnaerhet_sum)) %>%
+  # Velg de områdene hvor antall naturskogsnærhets-celler dekker minst 20 % av polygonen
+  mutate(areal=as.numeric(st_area(geometry)),
+         naturskogsnaerhet_andel = (naturskogsnaerhet_sum*100)/areal) %>%
+  filter(naturskogsnaerhet_andel>=0.2)
 
-# Kun Hurdal
-hogst_satellittv <- as.polygons(hogst_satellitt, dissolve = TRUE)
-hogst_satellitt_hurdal <- mask(hogst_satellittv, vect(Hurdal))
-
-# Fjern områder som er hogget de siste 30 årene
-eldrebarskog_r_fbp <- mask(eldrebarskogr, hogst_satellitt, inverse=T)
-eldrebarskog_r_fbp_hurdal <- mask(eldrebarskog_hurdal, hogst_satellitt_hurdal, inverse=T)
-
-```
-
-Fjern områder som overlapper med grå arealer
-
-```{r}
-eldrebarskog_r_fbpg <- mask(eldrebarskog_r_fbp, graatt_areal, inverse=T)
-eldrebarskog_r_fbpg_hurdal <- mask(eldrebarskog_r_fbp_hurdal, graatt_areal, inverse=T)
 ```
 
 ## Økologisk prioritering
@@ -137,79 +150,16 @@ barskog_arter <- read_csv("/data/P-Prosjekter2/155014_restaurerbar_natur_akershu
    st_as_sf(coords = c("X_32", "Y_32"), crs = 25832)
 ```
 
-```{r}
-# For å visualisere, aggreger opp
-r_vis <- aggregate(
-  eldrebarskog_r_fbpg,
-  fact = 6, # ca 100 m celler
-  fun = max,
-  na.rm = TRUE
-) 
-
-mapview(r_vis) +
-  mapview(barskog_arter)
-
-```
-
-```{r}
-
-# Kun Hurdal for å visualisere uten å aggregere
-mapview(eldrebarskog_r_fbpg_hurdal) +
-  mapview(barskog_arter)
-```
-
-### Legg til MI og HB13 for eldre barskog
+Legg også til eldre barskog med forbedringspotensiale fra MI og HB13.
 
 ## Eksporter
 
 ```{r}
-eldrebarskog_r_fbpg_sp <- st_as_sf(eldrebarskog_r_fbpg)
 
-temp_file <- "~/Mounts/scratch/tmp_ida/gpkg/eldre_barskog.gpkg" 
-final_file <- "/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Kriteriekart/eldre_barskog.gpkg" 
-
-writeRaster(eldrebarskog_r_fbpg, temp_file)
+temp_file <- "~/Mounts/scratch/tmp_ida/gpkg/eldrebarskog.gpkg" 
+final_file <- "/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Kriteriekart/eldrebarskog.gpkg" 
+st_write(eldrebarskog_v, temp_file, layer = "eldrebarskog", append=F)
 st_write(barskog_arter, temp_file, layer = "eldre_barskog_arter")
 
 file.copy(temp_file, final_file, overwrite = TRUE)
-```
-
-## Vektor istedet?
-
-Slett under hvis ikke relevant allikevel
-
-```{r}
-
-### Vector
-
-# Test 1: finn bestander med høy andel av naturskogsnærhet
-
-# Denne tar lang tid å kjøre, så gjør det bare for Hurdal
-naturskogsnaerhet_hurdal <- crop(naturskogsnaerhet,Hurdal)
-barskog_hurdal <- crop(barskog, Hurdal)
-hogst_satellitt_hurdal <- mask(hogst_satellittv, vect(Hurdal))
-
-# Fjern områder som er yngre enn 30 år
-eldrebarskogv <- vect(eldrebarskog)
-hogst_satellitt_hurdal <- mask(hogst_satellittv, vect(Hurdal))
-barskog_hurdal <- erase(barskog_hurdal, hogst_satellitt_hurdal)
-
-
-eldrebarskog_v_hurdal <- extract(naturskogsnaerhet_hurdal, barskog_hurdal, fun=sum, na.rm=TRUE)
-eldrebarskog_v_hurdal <- barskog_hurdal %>%
-  st_as_sf()%>%
-  mutate(naturskogsnaerhet_sum=eldrebarskog_v_hurdal[,2]) %>%
-  select(naturskogsnaerhet_sum) %>%
-  # Fjern de som er NA
-  filter(!is.na(naturskogsnaerhet_sum)) %>%
-  # Velg de områdene hvor antall naturskogsnærhets-celler dekker minst 20 % av polygonen
-  mutate(areal=as.numeric(st_area(geometry)),
-         naturskogsnaerhet_andel = (naturskogsnaerhet_sum*100)/areal) %>%
-  filter(naturskogsnaerhet_andel>=0.2)
-
-temp_file <- "~/Mounts/scratch/tmp_ida/gpkg/eldrebarskog_hurdal.gpkg" 
-final_file <- "/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Kriteriekart/eldrebarskog_hurdal.gpkg" 
-st_write(eldrebarskog_v_hurdal, temp_file, layer = "eldrebarskog", append=F)
-file.copy(temp_file, final_file, overwrite = TRUE)
-
 ```

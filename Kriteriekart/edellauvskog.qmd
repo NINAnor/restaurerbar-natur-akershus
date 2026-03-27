@@ -44,15 +44,6 @@ askershusbbox_32 <- vect(askershusbbox_32)
 askershusbbox <- vect(askershusbbox)
 ```
 
-### GreenPlan edellauvskog
-
-```{r}
-gp_edellauvskog <- rast("/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Data/Skog/Edellauvskog Greenplan/Edellauvskog_forekomst(x10,000)_norway_2023_100m.tif")
-
-# Klipp til Akershus
-gp_edellauvskog <- crop(gp_edellauvskog,askershusbbox)
-```
-
 ### SR16 V lauvskog og blandingsskog
 
 ```{r}
@@ -128,48 +119,6 @@ graatt_areal <- st_read("/data/R/GeoSpatialData/LandCover/Norway_Grå_Arealer_ve
 
 ```
 
-## Edellauvskog etter GreenPlan-modell
-
-```{r}
-gp_edellauvskog_v <- extract(gp_edellauvskog, lauvskog, fun=mean, na.rm=TRUE)
-
-edellauvskog_v <- lauvskog %>%
-  st_as_sf()%>%
-  mutate(gp_edellauvskog=gp_edellauvskog_v[,2]) %>%
-  select(gid, gp_edellauvskog)
-
-```
-
-Hent ut verdier også for HB13 og MI for å sette en terskelverdi for om noe er edellauvskog eller ikke.
-
-```{r}
-HB13_edellauvskog <- extract(gp_edellauvskog, HB13, fun=mean, na.rm=TRUE)
-HB13_edellauvskog_gp <- HB13 %>%
-  st_as_sf()%>%
-  mutate(gp_edellauvskog=HB13_edellauvskog[,2]) %>%
-  select(registreringsdato, bmVerdi, gp_edellauvskog)
-
-MI_edellauvskog <- extract(gp_edellauvskog, MI, fun=mean, na.rm=TRUE)
-MI_edellauvskog_gp <- MI %>%
-  st_as_sf()%>%
-  mutate(gp_edellauvskog=MI_edellauvskog[,2]) %>%
-  select(kartleggingsår, tilstand, gp_edellauvskog)
-
-# Kun de som er kartlagt relativt nært 2023 (året som representerer GreenPlan kartet)
-# I tillegg kun de i god tilstand
-MI_edellauvskog_gpf <- MI_edellauvskog_gp %>%
-  filter(tilstand == "god",
-         kartleggingsår > 2021)
-
-# Setter terskelverdien for de øverste verdiene 
-terskel <- quantile(MI_edellauvskog_gpf$gp_edellauvskog, prob=0.95)[[1]]
-
-# Bruk terskelverdien
-edellauvskog_gp <- edellauvskog_v %>%
-  filter(gp_edellauvskog >= terskel)
-
-```
-
 ## Edellauvskog etter artsobservasjoner
 
 Bruker indikatorarter for edellauvskog. Hvis en SR16 V lauvskog/blandingsskog polygon har en indikatorart i seg, så sier vi at polygonen er edellauvskog.
@@ -192,10 +141,23 @@ edellauv_skog <- erase(edellauv_skog, hogst_satellittv)
 edellauv_skog <- erase(edellauv_skog, vect(graatt_areal))
 ```
 
+Områder skal ikke være eldre enn 40 år.
+
+```{r}
+
+edellauv_skog <- extract(skogalder, edellauv_skog, fun=mean, na.rm=TRUE)
+edellauv_skog <- edellauv_skog %>%
+  st_as_sf()%>%
+  mutate(alder=edellauv_skog[,2]) %>%
+  # Fjern de som er under 40 år
+  filter(alder >= 40)
+
+```
+
 Noen arealer kan ha blitt fjernet, så kjører derfor en ny overlapp med indikatorartene.
 
 ```{r}
-edellauv_skog <- mask(edellauv_skog, vect(edellauv_arter))
+edellauv_skog <- mask(vect(edellauv_skog), vect(edellauv_arter))
 edellauv_skog <- st_as_sf(edellauv_skog)
 
 edellauv_arter_skog <-  mask(vect(edellauv_arter), vect(edellauv_skog))
@@ -241,26 +203,15 @@ edellauvsskog_artsobs <- st_join(edellauv_skog, edellauv_skog_arter_fp) %>%
 #mapview(edellauvsskog_artsobs, zcol="fremmed_n_arter")
 ```
 
-```{r}
-
-edellauvsskog_artsobsv <- vect(edellauvsskog_artsobs)
-
-edellauvsskog_alder <- extract(skogalder, edellauvsskog_artsobsv, fun=mean, na.rm=TRUE)
-edellauvsskog_artsobs_alder <- edellauvsskog_artsobsv %>%
-  st_as_sf()%>%
-  mutate(alder=edellauvsskog_alder[,2]) %>%
-  # Fjern de som er under 40 år
-  filter(alder >= 40)
-
-#mapview(edellauvsskog_artsobs_alder, zcol="fremmed_n_arter")
-```
-
 ## Eksporter
 
 ```{r}
 temp_file <- "~/Mounts/scratch/tmp_ida/gpkg/edellauvskog.gpkg" 
 final_file <- "/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Kriteriekart/edellauvskog.gpkg" 
-st_write(edellauvsskog_artsobs_alder, temp_file, layer = "edellauvskog", append=F)
+st_write(edellauvsskog_artsobs, temp_file, layer = "edellauvskog", append=F)
+st_write(edellauv_arter, temp_file, layer = "edellauvskog_indarter", append=F)
+st_write(edellauv_skog_arter_fp, temp_file, layer = "edellauvskog_fremmedarter", append=F)
+
 st_write(, temp_file, layer = "MI_edellauvskog", append=F)
 st_write(, temp_file, layer = "HB13_edellauvskog", append=F)
 
