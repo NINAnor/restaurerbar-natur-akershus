@@ -1,0 +1,45 @@
+---
+title: "HB13"
+format: html
+---
+
+```{r, echo=FALSE, results='hide'}
+
+# Sett tegnkodingen for teksthåndtering til norsk bokmål med UTF-8-encoding
+Sys.setlocale("LC_CTYPE", "nb_NO.UTF-8")
+
+# Last inn pakker
+packages <- c("dplyr","sf", "mapview", "terra")
+sapply(packages, require, character.only = TRUE)
+```
+
+HB13-data nedlastet direkte fra Naturbase inkluderer ikke utdypende informasjon om lokalitetene. Vi bruker derfor et skript hvor vi henter informasjonen direkte fra faktaarkene til hver HB13-lokalitet (ikke vist her).
+
+I dette skriptet slår vi sammen de originale HB13-dataene med faktaark-informasjonen.
+
+```{r}
+
+HB13 <- st_read("/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Data/Kartlagte naturtyper/Input_filer/Naturtyper_hb13_32_akershus_25832_FILEGDB.gdb",
+                  layer="Naturtyper_hb13_32_akershus") 
+
+
+fa_hb13 <- arrow::read_parquet("https://s3-int-1.nina.no/dms/data/project/911200/datasets/d659ec08-c0d1-4ca5-ab96-602d768473eb/naturtyper_akershus.parquet") %>%
+  rename(identifikasjon_lokalId=naturtype_id) %>%
+   mutate(datafangstdato = as.character(datafangstdato)) %>%
+   mutate(forvaltningsavtale = as.character(forvaltningsavtale)) %>%
+   mutate(forvaltningsplan = as.character(forvaltningsplan))
+
+```
+
+Slå sammen de to datasettene basert på ID og eksporter.
+
+```{r}
+HB13_faktaark <- HB13 %>%
+  left_join(fa_hb13) 
+
+temp_file <- "~/Mounts/scratch/tmp_ida/gpkg/HB13_faktaark.gpkg" 
+final_file <- "/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Data/Kartlagte naturtyper/HB13/HB13_faktaark.gpkg" 
+st_write(HB13_faktaark, temp_file, layer = "HB13_faktaark", append=F)
+file.copy(temp_file, final_file, overwrite = TRUE)
+
+```
