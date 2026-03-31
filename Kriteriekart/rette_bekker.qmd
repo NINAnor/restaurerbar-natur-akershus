@@ -30,6 +30,7 @@ vann_nett <- read_excel("/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/
   ungroup()
 
 # Vannforekomster in Akershus
+# https://kartkatalog.miljodirektoratet.no/Dataset/Details/3061 
 vann_for <- st_read("/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Data/Ferskvann/Vannforekomster_32_akershus_25832_FILEGDB.gdb", layer = "VannforekomstElv")
 
 ```

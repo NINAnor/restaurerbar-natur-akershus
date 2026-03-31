@@ -5,7 +5,7 @@ format: html
 editor: visual
 ---
 
-#### Load required libraries
+Load required libraries
 
 ```{r echo=FALSE}
 library(dplyr)
@@ -14,10 +14,12 @@ library(duckdb)
 library(DBI)
 library(glue)
 library(mapview)
+library(terra)
+library(igraph)
 
 ```
 
-#### Import data
+Import data
 
 ```{r echo=FALSE}
 
@@ -42,6 +44,11 @@ fjell <- st_read("/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Da
   st_filter(akershus, .predicate = st_intersects) %>% 
   st_intersection(akershus)
 
+# invasive species raster
+invasive <- rast("/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Data/Kantsoner/invasive_neighborhood.tif")
+
+# pollinator prediction raster
+poll <- rast("/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Data/Kantsoner/polliland_akershus.tif")
 ```
 
 Remove vassdrag inside fjellområder
@@ -123,15 +130,90 @@ vass_kant_uten_skog <- vass_outside_skog %>%
   select(-geom_wkb) %>%
   mutate(geometry = geom_sfc) %>%
   st_sf()
+```
 
+Extract invasive species data
+
+```{r echo=FALSE}
+
+vkus_vect_inv <- vect(vass_kant_uten_skog)
+
+# extract mean invasive
+res_inv  <- extract(invasive, vkus_vect_inv, fun = mean, na.rm = TRUE)
+vkus_vect_inv$mean_invasive <- res_inv[,2]
+
+# convert to sf
+vkus_inv_sf <- st_as_sf(vkus_vect_inv)
+```
+
+Extract pollinator data
+
+```{r echo=FALSE}
+
+vkus_vect_poll <- vect(vkus_inv_sf)
+
+# extract mean invasive
+res_poll  <- extract(poll, vkus_vect_poll, fun = mean, na.rm = TRUE)
+vkus_vect_poll$mean_poll <- res_poll[,2]
+
+# convert to sf
+vkus_combined_sf <- st_as_sf(vkus_vect_poll)
+```
+
+Find most suitable areas
+
+```{r echo=FALSE}
+
+hist(vkus_combined_sf$mean_invasive)
+hist(vkus_combined_sf$mean_poll)
+summary(vkus_combined_sf$mean_invasive) # median 0, mean 0.96
+summary(vkus_combined_sf$mean_poll) # median 3.52, mean 3.7
+
+# filter for areas with higher potential for pollinators and invasive species
+vkus_suitable <- vkus_combined_sf %>% 
+  filter(mean_invasive >= 0.96,
+         mean_poll >= 3.7) %>% 
+  st_make_valid()
+
+# identify intersecting polygons
+nb <- st_intersects(vkus_suitable)
+
+# convert to graph
+g <- graph_from_adj_list(nb)
+
+# find connected components
+groups <- components(g)$membership
+
+# dissolve using a weighted mean for value columns
+vkus_dissolved <- vkus_suitable %>% 
+  mutate(area = as.numeric(st_area(.))) %>% 
+  mutate(group_id = groups) %>% 
+  group_by(group_id) %>% 
+  summarise(mean_invasive = weighted.mean(mean_invasive, area, na.rm = TRUE),
+            mean_poll = weighted.mean(mean_poll, area, na.rm = TRUE)) %>% 
+  mutate(area = as.numeric(st_area(.)))
+```
+
+Filter for areas 1000 sq. m or larger
+
+```{r echo=FALSE}
+
+vkus_filtered <- vkus_dissolved %>% 
+  filter(area >= 1000) # n = 513
+mapview(vkus_filtered)
+```
+
+Export data
+
+```{r echo=FALSE}
 
 # write to scratch temporarily and copy to P drive
 out_gpkg <- "/data/scratch/tmp_jenny/gpkg/vassdrag_kant_lavland_uten_vegetasjon.gpkg"
-st_write(vass_kant_uten_skog, out_gpkg, layer = "kantsoner_vassdrag")
-
+st_write(vkus_filtered, out_gpkg, layer = "kantsoner_vassdrag")
 
 file.copy(
   from = out_gpkg,
   to = "/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Kriteriekart/vassdrag_kant_lavland_uten_vegetasjon.gpkg",
   overwrite = TRUE)
+
 ```

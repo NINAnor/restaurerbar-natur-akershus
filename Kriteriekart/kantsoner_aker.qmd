@@ -1,5 +1,6 @@
 ---
 title: "Kantsoner langs åker"
+author: "Jenny Hansen"
 format: html
 editor: visual
 ---

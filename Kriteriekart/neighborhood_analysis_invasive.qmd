@@ -68,12 +68,12 @@ Moving window neighborhood analysis
 
 ```{r echo=FALSE}
 
-# using a 9-cell (3x3) window
+# using a 100 m radius window
 execGRASS("r.neighbors",
           input = "invasive_rast",
           output = "invasive_rast_sum",
           method = "sum",
-          size = 3,
+          size = 21,
           flags = c("overwrite", "quiet"))
 
 ```
@@ -85,6 +85,6 @@ Apply mask and import/write
 execGRASS("r.mask", vector = "akershus_vect")
 
 invasive_neighborhood <- read_RAST("invasive_rast_sum")
-plot(invasive_neighborhood) # max 4/cell
-writeRaster(invasive_neighborhood, "/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Data/Kantsoner/invasive_neighborhood.tif")
+plot(invasive_neighborhood) # max 141/cell
+writeRaster(invasive_neighborhood, "/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Data/Kantsoner/invasive_neighborhood.tif", overwrite = TRUE)
 ```

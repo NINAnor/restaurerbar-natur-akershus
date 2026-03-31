@@ -12,7 +12,7 @@ library(sf)
 library(terra)
 library(dplyr)
 library(mapview)
-
+library(igraph)
 ```
 
 Import data
@@ -28,47 +28,59 @@ veier <- st_read("/data/R/GeoSpatialData/Topography/Norway_N50/Original/N50 Kart
 natur <- st_read("/data/R/GeoSpatialData/Topography/Norway_FKB/Original/FKB-AR5 FGDB-format/Basisdata_32_Akershus_25832_FKB-AR5_FGDB.gdb", layer = "fkb_ar5_omrade") %>% 
   filter(arealtype %in% c("30", "50", "60", "81"))
 
-
 # Canopy Height Model classification was done in Google Earth Engine:
 # https://code.earthengine.google.com/bae90ed14775ac4adac711981634e6e4
 
 chm_bin <- rast("/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Data/Kantsoner/akershus_chm_binary_10m.tif")
+
+# Pollinator prediction raster (from Markus)
+poll <- rast("/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Data/Kantsoner/polliland_akershus.tif")
+
+# Invasive species raster (created in neighborhood_analysis_invasive.qmd)
+invasive <- rast("/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Data/Kantsoner/invasive_neighborhood.tif")
 ```
 
 Find road segments that overlap natural land cover types
 
 ```{r echo=FALSE}
 
-# buffer natural areas by 10 m
-natur_buf <- natur %>% st_buffer(10)
+# switch to GEOS engine for single-sided buffers
+sf_use_s2(FALSE)
 
-# intersect with roads
-vei_nat_part <- st_intersection(veier, natur_buf)
+# create left & right buffers
+veier_left  <- st_buffer(veier,  dist = 20,  singleSide = TRUE)
+veier_right <- st_buffer(veier,  dist = -20, singleSide = TRUE)
 
-vei_nat_len <- vei_nat_part %>%
-  mutate(len_nat = st_length(.)) %>%
-  group_by(road_id) %>%  
-  summarise(len_nat = sum(len_nat))
+# combine
+veier_left$side  <- "left"
+veier_right$side <- "right"
 
-# get total length of all roads
-vei_total_len <- veier %>%
-  mutate(len_total = st_length(.)) %>%
-  select(road_id, len_total)
+veier_buf <- rbind(veier_left, veier_right)
+
+# intersect with natural areas
+vei_nat_part <- st_intersection(veier_buf, natur)
+
+# calculate area of overlap
+vei_nat_area <- vei_nat_part %>%
+  mutate(area_nat = st_area(.)) %>%
+  group_by(road_id, side) %>%
+  summarise(area_nat = sum(area_nat), .groups = "drop")
+
+# total buffer area
+vei_total_area <- veier_buf %>%
+  mutate(area_total = st_area(.)) %>%
+  st_drop_geometry()
 
 # proportion of road along nature
-vei_prop <- vei_total_len %>%
-  st_drop_geometry() %>% 
-  left_join(vei_nat_len %>% st_drop_geometry(), by = "road_id") %>%
-  mutate(len_nat = ifelse(is.na(len_nat), 0, len_nat),
-         prop_nat = as.numeric(len_nat) / as.numeric(len_total))
+vei_prop <- vei_total_area %>%
+  left_join(vei_nat_area %>% st_drop_geometry(), by = c("road_id", "side")) %>%
+  mutate(area_nat = ifelse(is.na(area_nat), 0, area_nat),
+         prop_nat = as.numeric(area_nat) / as.numeric(area_total))
 
 # filter for segments with at least 75% natural
-veier_sel <- veier %>%
-  left_join(vei_prop, by = "road_id") %>%
+veier_sel <- veier_buf %>%
+  left_join(vei_prop, by = c("road_id", "side")) %>%
   filter(prop_nat >= 0.75)
-
-# buffer remaining segments by 20 m
-veier_buf <- veier_sel %>% st_buffer(20)
 
 ```
 
@@ -76,22 +88,96 @@ Find areas that overlap CHM raster with '1' values- less than 2 m vegetation
 
 ```{r echo=FALSE}
 
-veier_natur_vect <- vect(veier_buf)
+veier_natur_vect <- vect(veier_sel)
 
 # get proportion of cells with <= 2 m vegetation
 veier_natur_vect$veg_low_prop <- extract(chm_bin, veier_natur_vect, fun = mean, na.rm = TRUE)[,2]
 
 # filter for those that are at least 75% low vegetation
-veier_sel <- veier_natur_vect %>% st_as_sf() %>% filter(veg_low_prop > 0.75)
-mapview(veier_sel, zcol = "veg_low_prop") 
+veier_filter <- veier_natur_vect %>% st_as_sf() %>% filter(veg_low_prop > 0.75)
+
+```
+
+Identify areas with high pollinator potential and invasive species present
+
+```{r echo=FALSE}
+
+veier_filter_vect <- vect(veier_filter)
+
+# extract mean pollinator
+res_poll <- extract(poll, veier_filter_vect, fun = mean, na.rm = TRUE)
+veier_filter_vect$mean_poll <- res_poll[,2]
+
+# extract mean invasive
+res_inv  <- extract(invasive, veier_filter_vect, fun = mean, na.rm = TRUE)
+veier_filter_vect$mean_invasive <- res_inv[,2]
+
+# convert to sf
+veier_sel_sf <- st_as_sf(veier_filter_vect)
+
+mapview(veier_sel_sf, zcol = "mean_poll")
+mapview(veier_sel_sf, zcol = "mean_invasive")
+
+range(veier_sel_sf$mean_poll, na.rm = TRUE) # 1.214054 13.129421
+range(veier_sel_sf$mean_invasive) # 0.00000 87.63636
+
+```
+
+Find suitable areas
+
+```{r echo=FALSE}
+
+# define some rubric of mean poll value >= X and mean invasive value >= Y
+hist(veier_sel_sf$mean_poll)
+hist(veier_sel_sf$mean_invasive)
+summary(veier_sel_sf$mean_poll) # median 4.65, mean 5
+summary(veier_sel_sf$mean_invasive) # median 0 mean 2.1
+
+# use mean values
+veier_suitable <- veier_sel_sf %>% 
+  filter(mean_poll >= 5 & mean_invasive >= 2.1) # n = 499
+
+# identify intersecting polygons
+nb <- st_intersects(veier_suitable)
+
+# convert to graph
+g <- graph_from_adj_list(nb)
+
+# find connected components
+groups <- components(g)$membership
+
+# dissolve using a weighted mean for value columns
+veier_dissolved <- veier_suitable %>% 
+  mutate(area = as.numeric(st_area(.))) %>% 
+  mutate(group_id = groups) %>% 
+  group_by(group_id) %>% 
+  summarise(mean_invasive = weighted.mean(mean_invasive, area, na.rm = TRUE),
+            mean_poll = weighted.mean(mean_poll, area, na.rm = TRUE)) %>% 
+  mutate(area = as.numeric(st_area(.)))
+
+```
+
+Filter for areas 1000 sq. m or larger
+
+```{r echo=FALSE}
+
+veier_final <- veier_dissolved %>% 
+  filter(area >= 1000) # n = 263
+mapview(veier_final, zcol = "mean_invasive")
+
+```
+
+Export data
+
+```{r echo=FALSE}
 
 # write to scratch temporarily and copy to P drive
 out_gpkg <- "/data/scratch/tmp_jenny/gpkg/kantsoner_vei_natur.gpkg"
-st_write(veier_sel, out_gpkg, layer = "kantsoner_vei_natur")
-
+st_write(veier_final, out_gpkg, layer = "kantsoner_vei_natur")
 
 file.copy(
   from = out_gpkg,
   to = "/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Kriteriekart/kantsoner_vei_natur.gpkg",
   overwrite = TRUE)
+
 ```
