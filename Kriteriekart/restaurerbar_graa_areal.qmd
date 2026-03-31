@@ -1,0 +1,41 @@
+---
+title: "Restaurerbar grå arealer"
+author: "Jenny Hansen"
+format: html
+editor: visual
+---
+
+Load required libraries
+
+```{r echo=FALSE}
+
+library(dplyr)
+library(sf)
+library(mapview)
+
+```
+
+Import data
+
+```{r echo=FALSE}
+
+# Gråstruktur
+gs <- st_read("/data/R/GeoSpatialData/LandCover/Norway_Grå_Arealer_versjon1/Original/Kart over grå arealer GeoPackage-format/32_25835_graastruktur_gpkg.gpkg", layer = "GraastrukturFlate") %>% 
+  st_transform(25832)
+```
+
+Explore some potentially unused polygons
+
+```{r echo=FALSE}
+
+# after some exploration, it appears that mineral extraction sites are 
+# probably the best candidates
+
+test <- gs %>%
+  mutate(likely_unused = (okosystemtype_3 %in% c("Mineral extraction sites", 
+                                                 "Port areas", "Other infrastructure") &
+      andelbygg == 0)) %>% 
+  filter(likely_unused == TRUE)
+
+# there is no way to know if they are currently in or out of use, though :/
+```
