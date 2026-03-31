@@ -12,6 +12,7 @@ library(dplyr)
 library(sf)
 library(duckdb)
 library(DBI)
+library(mapview)
 ```
 
 Register data with duckdb
@@ -41,20 +42,18 @@ dbExecute(con, "
     AND arealtype IS NOT NULL
 ")
 
-
 #gråareal
 dbExecute(con, "
   CREATE TABLE ga AS
   SELECT ST_Transform(geom, 'EPSG:25833', 'EPSG:25832') AS geom, *
   EXCLUDE geom
-  FROM ST_Read('/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Data/Kantsoner/32_25835_graastruktur_gpkg.gpkg', layer='GraaArealFlate')
+  FROM ST_Read('/data/R/GeoSpatialData/LandCover/Norway_Grå_Arealer_versjon1/Original/Kart over grå arealer GeoPackage-format/32_25835_graastruktur_gpkg.gpkg', layer='GraaArealFlate')
 ")
 
 # check that they are correctly registered
+dbGetQuery(con, "PRAGMA table_info('bekk')")
 dbGetQuery(con, "PRAGMA table_info('aker')")
 dbGetQuery(con, "PRAGMA table_info('ga')")
-dbGetQuery(con, "PRAGMA table_info('bekk')")
-
 ```
 
 Identify bekk segments overlapping åker and gråareal and remove them
@@ -108,14 +107,24 @@ bekk_clean_sf <- dbGetQuery(con, "
   filter(!st_is_empty(geometry))
 ```
 
+Find suitable areas (unsure how to add to this)
+
+```{r echo=FALSE}
+bekk_length <- bekk_clean_sf %>% 
+  mutate(length = as.numeric(st_length(.)))
+
+bekk_filtered <- bekk_length %>% 
+  filter(length >= 100) # n = 46
+mapview(bekk_filtered, col.regions = "hotpink")
+```
+
 Export
 
 ```{r echo=FALSE}
 
 # write to scratch temporarily and copy to P drive
 out_gpkg <- "/data/scratch/tmp_jenny/gpkg/bekkapninger.gpkg"
-st_write(bekk_clean_sf, out_gpkg, layer = "bekkapninger")
-
+st_write(bekk_filtered, out_gpkg, layer = "bekkapninger")
 
 file.copy(
   from = out_gpkg,
