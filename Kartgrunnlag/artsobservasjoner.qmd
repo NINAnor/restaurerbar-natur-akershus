@@ -207,3 +207,28 @@ artsobs_edellauv_sp <- artsobs_edellauv %>%
 # Eksporter
 artsobs_edellauv_sp %>% st_write("/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Data/Artsobservasjoner/Indikatorarter/artsobs_edellauv.csv")
 ```
+
+### Eng
+
+```{r}
+indikatorarter_eng <- read_excel("/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2025/Akershus_restaurering_Ida/Data/Artslister/Akershus engarter.xlsx")
+
+# Filtrer artsobservasjoner
+artsobs_eng <- artsobs %>%
+  filter(validScientificName %in% indikatorarter_eng$`Vitenskapelig navn`)  %>%
+  # Filtrer usikkerheten slik at den kun inkluderer observasjoner med 10 m eller mindre i usikkerhet
+  filter(coordinateUncertaintyInMeters <= 10) 
+
+# Gjør om til et romlig objekt
+artsobs_eng_sp <- artsobs_eng %>%
+  st_as_sf(coords = c("longitude", "latitude"), crs = 4326) %>%
+  # Konverter til EPSG: 25832
+  st_transform(25832) %>%
+  mutate(
+    X_32 = st_coordinates(.)[,1],
+    Y_32 = st_coordinates(.)[,2]
+  )
+
+# Eksporter
+artsobs_eng_sp %>% st_write("/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Data/Artsobservasjoner/Indikatorarter/artsobs_eng.csv")
+```
