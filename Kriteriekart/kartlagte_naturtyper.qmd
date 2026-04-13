@@ -3,3 +3,97 @@ title: "kartlagte_naturtyper"
 format: html
 ---
 
+```{r, echo=FALSE, results='hide'}
+
+# Sett tegnkodingen for teksthåndtering til norsk bokmål med UTF-8-encoding
+Sys.setlocale("LC_CTYPE", "nb_NO.UTF-8")
+
+# Last inn pakker
+packages <- c("dplyr","readr","sf", "mapview", "terra", "stringr")
+sapply(packages, require, character.only = TRUE)
+```
+
+## Last inn og klargjør data
+
+Datakildene som brukes:
+
+## DN HB 13
+
+HB13 dataene er en sammenstilling av data lastet ned fra Naturbase for Akershus og data samlet inn fra HB13-lokalitetenes faktaark. Dette er beskrevet nærmere i Kartgrunnlag/HB13.qmd.
+
+```{r}
+
+HB13 <- st_read("/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Data/Kartlagte naturtyper/HB13/HB13_faktaark.gpkg",
+                  layer="HB13_faktaark")
+
+
+```
+
+## Prosesser DN HB13 data
+
+Ønsker å finne de som er i dårlig tilstand. Gjør det ved å først filtrere de som har informasjon i kolonnene paavirkning, fremmede_arter og raad_om_skjoetsel_og_hensyn.
+
+```{r}
+HB13_fb <- HB13 %>%
+  filter(
+    if_all(
+      c(paavirkning, fremmede_arter, raad_om_skjoetsel_og_hensyn),
+      ~ !is.na(.) | trimws(.) != ""
+    ),
+    # Hvis paavirkning og raad_om_skjoetsel_og_hensyn er tomme og det står "Ingen" i fremmede_arter, fjern disse også
+    !(grepl("ingen", fremmede_arter, ignore.case = TRUE) &
+      (is.na(paavirkning) | trimws(paavirkning) == "") &
+      (is.na(raad_om_skjoetsel_og_hensyn) | trimws(raad_om_skjoetsel_og_hensyn) == ""))
+  ) %>%
+  mutate(
+    tekst_lc = str_to_lower(raad_om_skjoetsel_og_hensyn),
+    restaurering_flagg = str_detect(
+      tekst_lc,
+      paste(
+        c(
+          "fjerne|fjernes|fjerning",
+          "rydde|rydding|ryddes",
+          "bekjempe|bekjempes|bekjempelse",
+          "fremmedart|fremmede arter|svartelisteart",
+          "gjengro|unngå gjengroing|hindre gjengroing",
+          "kratt",
+          "busk|busker",
+          "oppslag|treoppslag",
+          "ta ut gran|uttak av gran|gran tas ut|hogg.*gran",
+          "fristill|fristilles",
+          "restaurer|restaurering",
+          "\\bslått\\b|\\bslås\\b|\\bslå\\b",
+          "gjeninnføre beite|bør beites|skjøttes med beite|beiting bør gjenopptas|beitedyr gjeninnføres"
+        ),
+        collapse = "|"
+      )
+    ),
+    ikke_tiltak = str_detect(
+      tekst_lc,
+      "ikke behov for skjøtsel|skjøtselstiltak ikke nødvendig|ingen skjøtselstiltak nødvendig|ligge i fred|ikke behov for|ingen tiltak|unngå beskjæring|unødvendig* beskjæring"
+    )
+  ) %>%
+  filter(restaurering_flagg & !ikke_tiltak) %>%
+  rowwise() %>%
+  mutate(
+    tiltakstype = list(c(
+      "fremmede arter"[str_detect(tekst_lc, "fremmedart|fremmede|uønsket|svartelisteart|bekjempe")],
+      "rydding / hindre gjengroing"[str_detect(tekst_lc, "gjengro|kratt|busk|oppslag|rydde|rydding")],
+      "uttak av trær / fristilling"[str_detect(tekst_lc, "ta ut gran|uttak av gran|hogg.*gran|fristill")],
+      "slått"[str_detect(tekst_lc, "\\bslått\\b|\\bslås\\b|\\bslå\\b|\\bslåtter\\b")],
+      "beite"[str_detect(tekst_lc, "beite")],
+      "restaurering generelt"[str_detect(tekst_lc, "restaurer|restaurering")],
+      "fjerne søppel"[str_detect(tekst_lc, "søppel")],
+      "generell fjerning"[str_detect(tekst_lc, "fjerne|fjerning")]
+    ))
+  ) %>%
+  mutate(tiltakstype = paste(na.omit(unlist(tiltakstype)), collapse = ", ")) %>%
+  ungroup() %>%
+  #Fjern kolonner som ikke trengs
+  select(-c("tekst_lc", "restaurering_flagg", "ikke_tiltak"))
+
+temp_file <- "~/Mounts/scratch/tmp_ida/gpkg/kartlagtenaturtyper_HB13.gpkg" 
+final_file <- "/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Kriteriekart/kartlagtenaturtyper_HB13.gpkg" 
+st_write(HB13_fb, temp_file, layer = "kartlagtenaturtyper_HB13", append=F)
+file.copy(temp_file, final_file, overwrite = TRUE)
+```
