@@ -1,0 +1,70 @@
+---
+title: "grofter_myr_skog"
+format: html
+---
+
+```{r, echo=FALSE, results='hide'}
+
+# Sett tegnkodingen for teksthåndtering til norsk bokmål med UTF-8-encoding
+Sys.setlocale("LC_CTYPE", "nb_NO.UTF-8")
+
+# Last inn pakker
+packages <- c("dplyr","sf", "mapview", "terra")
+sapply(packages, require, character.only = TRUE)
+
+```
+
+Grøfter i myr og skog er laget vha en KI-modell som tolker fjernmålte data (ikke vist her). KI-modellen skiller ikke mellom arealtyper, så filtreringen skjer her.
+
+## Last inn og klargjør data
+
+Datakildene som brukes:
+
+### Grøfter
+
+```{r}
+grofter <- st_read("/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2025/DitchesOut/FinalVectors/AkershusDitchesAllAG.gpkg")
+
+```
+
+### AR5
+
+Trenger AR5 skog og myr for Akershus.
+
+```{r}
+ar5skogmyr <- st_read(
+  "/data/R/GeoSpatialData/Topography/Norway_FKB/Original/FKB-AR5 FGDB-format/Basisdata_32_Akershus_25832_FKB-AR5_FGDB.gdb",
+  # Filtrer for å kun få ut myr og skog
+  query = "SELECT * FROM fkb_ar5_omrade WHERE arealtype IN ('30','60')"
+) %>%
+  st_transform(25832)
+```
+
+## Grøfter i myr og skog
+
+Hent ut de som overlapper med myr og skog.
+
+```{r}
+
+i <- st_intersects(grofter, ar5skogmyr)
+grofter_myrskog <- grofter[lengths(i) > 0, ]
+```
+
+Fjern de grøftene som er mindre enn 2 m2.
+
+```{r}
+grofter_myrskog2 <- grofter_myrskog %>%
+  mutate(areal=as.numeric(st_area(geom))) %>%
+  filter(areal > 2) %>%
+  select(areal)
+```
+
+## Eksporter
+
+```{r}
+temp_file <- "~/Mounts/scratch/tmp_ida/gpkg/grofter_myrskog.gpkg" 
+final_file <- "/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Kriteriekart/grofter_myrskog.gpkg" 
+st_write(grofter_myrskog2, temp_file, layer = "grofter_myrskog", append=F)
+
+file.copy(temp_file, final_file, overwrite = TRUE)
+```
