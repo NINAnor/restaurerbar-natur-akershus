@@ -63,6 +63,25 @@ graatt_areal <- st_read("/data/R/GeoSpatialData/LandCover/Norway_Grå_Arealer_ve
 
 ```
 
+### Kartlagte naturtyper (MI og HB13)
+
+```{r}
+# HB13
+HB13_osp <- st_read("/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Data/Kartlagte naturtyper/HB13/HB13_faktaark.gpkg",
+                             layer="HB13_faktaark") %>%
+  # Naturtypeutformninger som har osp: D1214 = Store gamle trær - Osp, F0701 = Gammel boreal lauvskog - Ospeholt
+  filter(naturtypeUtforming %in% c("D1214","F0701"))
+
+# MI
+MI_osp <- st_read("/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Data/Kartlagte naturtyper/Input_filer/Naturtyper_nin_32_akershus_25832_FILEGDB.gdb",
+                  layer="naturtyper_nin_omr") %>%
+  filter(grepl("Gammel lågurtospeskog|Kalkrik ospeskog", naturtype),
+           # Fjerner de som har god tilstand
+         tilstand != "god"
+         )
+
+```
+
 ## Osp i barskog
 
 Først, finn de polygonene som har indikatorarter i seg.
@@ -82,6 +101,15 @@ osp_barskog <- erase(osp_barskog, hogst_satellittv)
 
 # Grå arealer
 osp_barskog <- erase(osp_barskog, vect(graatt_areal))
+
+# Splitt multipolygoner
+osp_barskog <- disagg(osp_barskog)
+
+# Fjern små områder for å unngå slivers
+osp_barskog <- osp_barskog %>%
+  st_as_sf() %>%
+  mutate(areal=as.numeric(st_area(geometry))) %>%
+  filter(areal >= 1000)
 ```
 
 Noen arealer kan ha blitt fjernet, så kjører derfor en ny overlapp med indikatorartene.
@@ -90,7 +118,7 @@ Noen arealer kan ha blitt fjernet, så kjører derfor en ny overlapp med indikat
 
 # Først, hent ut de polygonene som har ospeindikatorer i seg.
 # Dette er raskere enn å gjøre ren st_join
-osp_barskog <- mask(osp_barskog, vect(osp_arter))
+osp_barskog <- mask(vect(osp_barskog), vect(osp_arter))
 osp_barskog <- st_as_sf(osp_barskog)
 
 osp_arter_barskog <-  mask(vect(osp_arter), vect(osp_barskog))
@@ -106,8 +134,21 @@ osp_barskog <- st_join(osp_barskog, osp_arter_barskog) %>%
 
 ```
 
+Vi legger i tillegg på kartlagte naturtyper med osp som overlapper med SR16 V barskog.
+
 ```{r}
-mapview(osp_barskog, zcol="n_arter")
+# HB13
+i <- st_intersects(HB13_osp, barblandingsskog)
+HB13_osp_barskog <- HB13_osp[lengths(i) == 0, ]
+  
+# MI
+i <- st_intersects(MI_osp, barblandingsskog)
+MI_osp_barskog <- MI_osp[lengths(i) == 0, ]
+
+```
+
+```{r}
+mapview(HB13_osp_barskog) + mapview(MI_osp_barskog)
 ```
 
 ## Eksporter
@@ -116,5 +157,9 @@ mapview(osp_barskog, zcol="n_arter")
 temp_file <- "~/Mounts/scratch/tmp_ida/gpkg/osp_i_barskog.gpkg" 
 final_file <- "/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Kriteriekart/osp_i_barskog.gpkg" 
 st_write(osp_barskog, temp_file, layer = "osp_i_barskog", append=F)
+st_write(osp_arter_barskog, temp_file, layer = "osp_indikatorarter_barskog", append=F)
+st_write(HB13_osp_barskog, temp_file, layer = "HB13_osp_barskog", append=F)
+st_write(MI_osp_barskog, temp_file, layer = "MI_osp_barskog_forbedringspotensial", append=F)
+
 file.copy(temp_file, final_file, overwrite = TRUE)
 ```
