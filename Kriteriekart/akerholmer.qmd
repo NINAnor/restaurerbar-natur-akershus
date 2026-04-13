@@ -3,3 +3,262 @@ title: "akerholmer"
 format: html
 ---
 
+```{r, echo=FALSE, results='hide'}
+
+# Sett tegnkodingen for teksthåndtering til norsk bokmål med UTF-8-encoding
+Sys.setlocale("LC_CTYPE", "nb_NO.UTF-8")
+
+# Last inn pakker
+packages <- c("dplyr","sf", "mapview", "terra", "lwgeom")
+sapply(packages, require, character.only = TRUE)
+
+```
+
+## Last inn og klargjør data
+
+Datakildene som brukes:
+
+-   AR5
+
+-   DTM10 FlowAccumulation
+
+-   HB13
+
+-   Fremmedarter
+
+-   Edellauvsindikatorer
+
+-   Engarter
+
+-   Rødlistede arter
+
+### AR5
+
+Last inn områder med skog og åpen fastmark (30 - Skog; 50 - Åpen fastmark) og åker (21 - Fulldyrka jord; 22 - Overflatedyrka jord).
+
+```{r}
+ar5_fastmark <- st_read(
+  "/data/R/GeoSpatialData/Topography/Norway_FKB/Original/FKB-AR5 FGDB-format/Basisdata_32_Akershus_25832_FKB-AR5_FGDB.gdb",
+  # Filtrer for å kun få ut skog og åpen fastmark
+  query = "SELECT * FROM fkb_ar5_omrade WHERE arealtype IN ('30','50')"
+) %>%
+  st_transform(25832)
+
+ar5 <- st_read(
+  "/data/R/GeoSpatialData/Topography/Norway_FKB/Original/FKB-AR5 FGDB-format/Basisdata_32_Akershus_25832_FKB-AR5_FGDB.gdb") %>%
+  st_transform(25832)
+```
+
+### DTM10 FlowAccumulation
+
+```{r}
+fa <- rast("/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2025/Kartlegging/Data_Akershus/dtm10.gdb", subds="rFlowAcc10")
+```
+
+### HB13 Åkerholmer
+
+```{r}
+HB13 <- st_read("/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Data/Kartlagte naturtyper/HB13/HB13_faktaark.gpkg") %>%
+  filter(naturtypeUtforming == "D1101")
+```
+
+### Observasjoner av indikatorarter for edellauvskog, engarter og rødlistede arter
+
+```{r}
+edellauv_arter <- read_csv("/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Data/Artsobservasjoner/Indikatorarter/artsobs_edellauv.csv") %>%
+   st_as_sf(coords = c("X_32", "Y_32"), crs = 25832) 
+
+eng_arter <- read_csv("/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Data/Artsobservasjoner/Indikatorarter/artsobs_eng.csv") %>%
+   st_as_sf(coords = c("X_32", "Y_32"), crs = 25832) 
+
+rl_arter <- read_csv("/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Data/Artsobservasjoner/Roedlistede arter/artsobs_RLarter.csv") %>%
+   st_as_sf(coords = c("X_32", "Y_32"), crs = 25832) 
+
+prioritering_arter <- rbind(edellauv_arter, eng_arter, rl_arter)
+
+```
+
+### Observasjoner av fremmedarter og gran
+
+```{r}
+fremmedarter <- read_csv("/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Data/Artsobservasjoner/Fremmedarter/artsobs_fremmed.csv") %>%
+   st_as_sf(coords = c("X_32", "Y_32"), crs = 25832) 
+gran <- read_csv("/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Data/Artsobservasjoner/Fremmedarter/artsobs_gran.csv") %>%
+   st_as_sf(coords = c("X_32", "Y_32"), crs = 25832) 
+
+fremmedarter_gran <- rbind(fremmedarter, gran)
+
+```
+
+## Finn områder hvor fastmark og åker er naboer
+
+Slår først sammen AR5 fastmark til én type. Det samme for åker.
+
+```{r}
+# Først, fjern tynne polygoner (kantsoner) ved å fjerne de områdene som har smal bredde (5 m)
+ar5_fastmark2 <- ar5_fastmark %>%
+  mutate(areal = as.numeric(st_area(SHAPE)),
+         perimeter = as.numeric(st_length(st_boundary(.))),
+         shape_index = areal / perimeter) %>%
+  filter(areal < 30000 & areal > 500,
+         shape_index > 3)
+
+# Fjern de arealene fra AR5 som er i ar5_fastmark2
+ar5_2 <- ar5 %>%
+  filter(!(lokalid %in% ar5_fastmark2$lokalid))
+
+i <- st_touches(ar5_fastmark2, ar5_2)
+
+aker_koder <- "21" # fulldyrket jord
+
+akerholmer <- ar5_fastmark2[
+  sapply(i, function(ix) {
+    if (length(ix) == 0) return(FALSE)
+    all(ar5_2$arealtype[ix] %in% aker_koder)
+  }),
+]
+
+
+akerholmer2 <- ar5_fastmark2[
+  sapply(i, function(ix) {
+    length(ix) == 1 &&
+      all(ar5_2$arealtype[ix] %in% aker_koder)
+  }),
+]
+
+akerholmer3 <- akerholmer2 %>%
+  summarise() %>%
+  st_cast("POLYGON")
+
+ar5_3 <- ar5 %>%
+  filter(!(lokalid %in% akerholmer2$lokalid))
+
+j <- st_touches(akerholmer3, ar5_3)
+
+akerholmer4 <- akerholmer3[
+  sapply(j, function(ix) {
+    length(ix) > 0 &&
+      all(ar5_3$arealtype[ix] %in% aker_koder)
+  }),
+]
+
+  
+```
+
+Fjern de fastmarksområdene som er veldig store for å kun stå igjen med øyer (\<30 000 m2). Fjerner også de som er veldig små (\>500 m2)
+
+```{r}
+akerholmer5 <- akerholmer4 %>%
+  mutate(areal=as.numeric(st_area(SHAPE))) %>%
+  filter(areal < 30000 & areal > 500)
+
+akerholmer_f <- akerholmer5
+```
+
+```{r}
+mapview(akerholmer5)
+```
+
+## Finn åkerholmer
+
+Bruker TWI
+
+```{r}
+
+
+
+# Sett det som ikke overlapper med åkerholmer-laget til NA
+fa_na <- mask(fa, akerholmer5 %>% st_transform(25833))
+
+pts <- as.points(fa_na, na.rm = TRUE)
+pts <- pts %>%
+  st_as_sf() %>%
+  st_transform(25832)
+
+#
+akerholmer5 <- akerholmer5 %>%
+  mutate(lokalid = row_number())
+
+# Beregn median-verdien av pts for hver åkerholme-polygon
+pts_join <- st_join(pts, akerholmer5, join = st_within)
+
+median_per_poly <- pts_join %>%
+  st_drop_geometry() %>%
+  group_by(lokalid) %>%
+  summarise(FA_median = median(rFlowAcc10, na.rm = TRUE))
+
+akerholmer6 <- akerholmer5 %>%
+  left_join(median_per_poly, by = "lokalid")
+
+# Finn terskel
+akerholmer_t <- akerholmer6 %>%
+  filter(FA_median <= 2)
+
+
+```
+
+## Åkerholmer med forbedringspotensial
+
+Legger til om det er registrert fremmedarter og gran.
+
+```{r}
+
+# Først, hent ut de observasjonene av fremmedarter og gran som overlapper med åkerholmer
+akerholmer_arter_fp <-  mask(vect(fremmedarter_gran), vect(akerholmer_f))
+akerholmer_arter_fp <- st_as_sf(akerholmer_arter_fp)
+
+akerholmer_fa <- st_join(akerholmer_f, akerholmer_arter_fp) %>%
+   group_by(lokalid) %>%   # bytt til riktig ID-kolonne i polygonet
+   summarise(
+     fremmed_n_obs = n(),
+     fremmed_n_arter = n_distinct(preferredPopularName),
+     fremmed_arter = paste(unique(preferredPopularName), collapse = ", "),
+   ) %>%
+  mutate(fremmed_arter = ifelse(fremmed_arter == "NA", NA, fremmed_arter),
+         fremmed_n_obs = ifelse(is.na(fremmed_arter), NA, fremmed_n_obs),
+    fremmed_n_obs = ifelse(is.na(fremmed_arter), NA, fremmed_n_obs),
+         fremmed_n_arter = ifelse(is.na(fremmed_arter), NA, fremmed_n_arter))
+
+
+```
+
+For HB13 åkerholmer ser det ut til at alle i Akershus generelt kan ha dårlig tilstand.
+
+## Økologisk prioritering
+
+Legg til informasjon om edellauvskogsarter, engarter og rødlistede arter til økologisk prioritering.
+
+```{r}
+# Først, hent ut de observasjonene av fremmedarter og gran som overlapper med åkerholmer
+akerholmer_arter_p <-  mask(vect(prioritering_arter), vect(akerholmer_f))
+akerholmer_arter_p <- st_as_sf(akerholmer_arter_p)
+
+akerholmer_fa_p <- st_join(akerholmer_fa, akerholmer_arter_p) %>%
+   group_by(lokalid) %>%   # bytt til riktig ID-kolonne i polygonet
+   summarise(
+     prioritering_n_obs = n(),
+     prioritering_n_arter = n_distinct(preferredPopularName),
+     prioritering_arter = paste(unique(preferredPopularName), collapse = ", "),
+   ) %>%
+  mutate(prioritering_arter = ifelse(prioritering_arter == "NA", NA, prioritering_arter),
+         prioritering_n_obs = ifelse(is.na(prioritering_arter), NA, prioritering_n_obs),
+    prioritering_n_arter = ifelse(is.na(prioritering_arter), NA, prioritering_n_arter),
+         prioritering_arter = ifelse(is.na(prioritering_arter), NA, prioritering_arter)) %>%
+  # Legg til fremmedarter
+  left_join(akerholmer_fa %>% st_drop_geometry(),
+            by="lokalid")
+```
+
+## Eksporter
+
+```{r}
+temp_file <- "~/Mounts/scratch/tmp_ida/gpkg/akerholmer.gpkg" 
+final_file <- "/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Kriteriekart/akerholmer.gpkg" 
+st_write(akerholmer_fa_p, temp_file, layer = "akerholmer", append=F)
+st_write(HB13, temp_file, layer = "hb13_akerholmer", append=F)
+st_write(akerholmer_arter_p, temp_file, layer = "prioritering_arter", append=F)
+st_write(akerholmer_arter_fp, temp_file, layer = "fremmed_arter", append=F)
+
+file.copy(temp_file, final_file, overwrite = TRUE)
+
+```
