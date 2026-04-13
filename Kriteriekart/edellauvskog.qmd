@@ -58,13 +58,18 @@ lauvskog <- st_read(
 ### Kartlagte naturtyper (MI og HB13)
 
 ```{r}
-HB13 <- st_read("/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Data/Kartlagte naturtyper/Input_filer/Naturtyper_hb13_32_akershus_25832_FILEGDB.gdb",
-                  layer="Naturtyper_hb13_32_akershus") %>%
-  # Tre typer som er edellauvskog
-  filter(naturtype %in% c("F01","F02","F15"))
+HB13_edellauv <- st_read("/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Data/Kartlagte naturtyper/HB13/HB13_faktaark.gpkg",
+                             layer="HB13_faktaark") %>%
+  # Tre naturtyper som er edellauvskog. I tillegg er det en utforming innenfor sumpskog som faller utenfor disse: F1406 = Gammel edellauvsumpskog, Alm, Ask, Lind, Bøk
+  filter(naturtype %in% c("F01","F02","F15") | naturtypeUtforming %in% "F1406")
 
-
-MI <- st_read("/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Data/Kartlagte naturtyper/Input_filer/Naturtyper_nin_32_akershus_25832_FILEGDB.gdb",
+# HB13 restaurerbar
+HB13_edellauv_fp <- st_read("/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Kriteriekart/kartlagtenaturtyper_HB13.gpkg") %>%
+  # Tre naturtyper som er edellauvskog. I tillegg er det en utforming innenfor sumpskog som faller utenfor disse: F1406 = Gammel edellauvsumpskog, Alm, Ask, Lind, Bøk
+  filter(naturtype %in% c("F01","F02","F15") | naturtypeUtforming %in% "F1406")
+  
+# MI
+MI_edellauv <- st_read("/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Data/Kartlagte naturtyper/Input_filer/Naturtyper_nin_32_akershus_25832_FILEGDB.gdb",
                   layer="naturtyper_nin_omr") %>%
   filter(grepl("edellauv",naturtype))
 ```
@@ -115,7 +120,8 @@ hogst_satellitt <- rast("/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/
 ```{r}
 
 graatt_areal <- st_read("/data/R/GeoSpatialData/LandCover/Norway_Grå_Arealer_versjon1/Original/Kart over grå arealer GeoPackage-format/32_25835_graastruktur_gpkg.gpkg") %>%
-  st_transform(25832)
+  st_transform(25832) %>%
+  vect()
 
 ```
 
@@ -138,69 +144,104 @@ hogst_satellittv <- as.polygons(hogst_satellitte, dissolve = TRUE)
 edellauv_skog <- erase(edellauv_skog, hogst_satellittv)
 
 # Grå arealer
-edellauv_skog <- erase(edellauv_skog, vect(graatt_areal))
+edellauv_skog <- erase(edellauv_skog, graatt_areal)
+
+# Splitt multipolygoner
+edellauv_skog <- disagg(edellauv_skog)
+
+# Fjern små områder for å unngå slivers
+edellauv_skog <- edellauv_skog %>%
+  st_as_sf() %>%
+  mutate(areal=as.numeric(st_area(geometry))) %>%
+  filter(areal >= 1000)
 ```
 
 Områder skal ikke være eldre enn 40 år.
 
 ```{r}
 
-edellauv_skog <- extract(skogalder, edellauv_skog, fun=mean, na.rm=TRUE)
+edellauv_skog_alder <- extract(skogalder, edellauv_skog, fun=mean, na.rm=TRUE)
 edellauv_skog <- edellauv_skog %>%
   st_as_sf()%>%
-  mutate(alder=edellauv_skog[,2]) %>%
+  mutate(alder=edellauv_skog_alder[,2]) %>%
   # Fjern de som er under 40 år
   filter(alder >= 40)
 
 ```
 
+## Edellauvskog med forbedringspotensial
+
+Tilstedeværelse av fremmedarter og gran tilsier at lokaliteten har forbedringspotensial.
+
+```{r}
+# Vil også inkludere de som ikke har fremmedarter, så her filtrerer vi først bort de fremmedartsobservasjonene som ikke er i en edellauvskog-polygon
+edellauv_skog_fa <- mask(vect(edellauv_skog), vect(fremmedarter_gran))
+edellauv_skog_fa <- st_as_sf(edellauv_skog_fa)
+
+edellauv_skog_arter_fp <-  mask(vect(fremmedarter_gran), vect(edellauv_skog))
+edellauv_skog_arter_fp <- st_as_sf(edellauv_skog_arter_fp)
+
+edellauv_skog_fa <- st_join(edellauv_skog_fa, edellauv_skog_arter_fp) %>%
+   group_by(gid) %>%   # bytt til riktig ID-kolonne i polygonet
+   summarise(
+     fremmed_n_obs = n(),
+     fremmed_n_arter = n_distinct(preferredPopularName),
+     fremmed_arter = paste(unique(preferredPopularName), collapse = ", "),
+   )  %>%
+  # Legg til informasjon om indikatorarter
+  left_join(edellauvsskog_artsobs %>% st_drop_geometry(),
+            by="gid")
+```
+
 Noen arealer kan ha blitt fjernet, så kjører derfor en ny overlapp med indikatorartene.
 
 ```{r}
-edellauv_skog <- mask(vect(edellauv_skog), vect(edellauv_arter))
-edellauv_skog <- st_as_sf(edellauv_skog)
+edellauvsskog_artsobs_ind <- mask(vect(edellauv_skog_fa), vect(edellauv_arter))
+edellauvsskog_artsobs_ind <- st_as_sf(edellauvsskog_artsobs_ind)
 
-edellauv_arter_skog <-  mask(vect(edellauv_arter), vect(edellauv_skog))
+edellauv_arter_skog <-  mask(vect(edellauv_arter), vect(edellauvsskog_artsobs_ind))
 edellauv_arter_skog <- st_as_sf(edellauv_arter_skog)
 
-edellauvsskog_artsobs <- st_join(edellauv_skog, edellauv_arter) %>%
+edellauvsskog_artsobs <- st_join(edellauvsskog_artsobs_ind, edellauv_arter_skog) %>%
   group_by(gid) %>%   # bytt til riktig ID-kolonne i polygonet
   summarise(
     n_obs = n(),
     n_arter = n_distinct(preferredPopularName),
     arter = paste(unique(preferredPopularName), collapse = ", ")
   )
-
 ```
 
-## Edellauvskog med forbedringspotensial
-
-Sjekker to typer:
-
--   SR16 beta alder
-
--   Tilstedeværelse av fremmedarter og gran
+## Legg til kartlagte naturtyper
 
 ```{r}
-# Vil også inkludere de som ikke har fremmedarter, så her filtrerer vi først bort de fremmedartsobservasjonene som ikke er i en edellauvskog-polygon
-edellauv_skog_arter_fp <-  mask(vect(fremmedarter_gran), vect(edellauv_skog))
-edellauv_skog_arter_fp <- st_as_sf(edellauv_skog_arter_fp)
+# HB13 polygoner med god tilstand
+HB13_edellauv_god <- HB13_edellauv %>%
+  # Hvis en lokalitet er i HB13 edellauv med forbedringspotensial (HB13_edellauv_fp), fjern fra "god tilstand"-datasettet
+  filter(!(identifikasjon_lokalId %in% HB13_edellauv_fp$identifikasjon_lokalId))
 
-edellauvsskog_artsobs <- st_join(edellauv_skog, edellauv_skog_arter_fp) %>%
-   group_by(gid) %>%   # bytt til riktig ID-kolonne i polygonet
-   summarise(
-     fremmed_n_obs = n(),
-     fremmed_n_arter = n_distinct(preferredPopularName),
-     fremmed_arter = paste(unique(preferredPopularName), collapse = ", "),
-   ) %>%
-  mutate(fremmed_n_obs = ifelse(fremmed_arter=="NA",0,fremmed_n_obs),
-         fremmed_n_arter =  ifelse(fremmed_arter=="NA",0,fremmed_n_arter)
-         )  %>%
-  # Legg til informasjon om indikatorarter
-  left_join(edellauvsskog_artsobs %>% st_drop_geometry(),
-            by="gid")
+# MI god tilstand
+MI_edellauv_god <- MI_edellauv %>%
+  filter(tilstand %in% "god")
 
-#mapview(edellauvsskog_artsobs, zcol="fremmed_n_arter")
+# MI dårlig tilstand (moderat, dårlig og sværtRedusert)
+MI_edellauv_fp <- MI_edellauv %>%
+  filter(!(identifikasjon_lokalId %in% MI_edellauv_god$identifikasjon_lokalId))
+
+
+# Klipp alle lagene mot grått areal og hogst
+HB13_edellauv_god <- erase(vect(HB13_edellauv_god), hogst_satellitt)
+HB13_edellauv_god <- erase(HB13_edellauv_god, graatt_areal)
+
+MI_edellauv_god <- erase(vect(MI_edellauv_god), hogst_satellitt)
+MI_edellauv_god <- erase(MI_edellauv_god, graatt_areal)
+
+MI_edellauv_fp <- erase(vect(MI_edellauv_fp), hogst_satellitt)
+MI_edellauv_fp <- erase(MI_edellauv_fp, graatt_areal)
+
+HB13_edellauv_god <- st_as_sf(HB13_edellauv_god)
+MI_edellauv_god <- st_as_sf(MI_edellauv_god)
+MI_edellauv_fp <- st_as_sf(MI_edellauv_fp)
+
 ```
 
 ## Eksporter
@@ -208,12 +249,19 @@ edellauvsskog_artsobs <- st_join(edellauv_skog, edellauv_skog_arter_fp) %>%
 ```{r}
 temp_file <- "~/Mounts/scratch/tmp_ida/gpkg/edellauvskog.gpkg" 
 final_file <- "/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Kriteriekart/edellauvskog.gpkg" 
-st_write(edellauvsskog_artsobs, temp_file, layer = "edellauvskog", append=F)
-st_write(edellauv_arter, temp_file, layer = "edellauvskog_indarter", append=F)
-st_write(edellauv_skog_arter_fp, temp_file, layer = "edellauvskog_fremmedarter", append=F)
 
-st_write(, temp_file, layer = "MI_edellauvskog", append=F)
-st_write(, temp_file, layer = "HB13_edellauvskog", append=F)
+# Slett filene først hvis de eksisterer
+if (file.exists(temp_file)) file.remove(temp_file)
+if (file.exists(final_file)) file.remove(final_file)
+
+
+st_write(edellauvsskog_artsobs, temp_file, layer = "edellauvskog", append=F)
+st_write(edellauv_arter_skog, temp_file, layer = "edellauvskog_indarter", append=F)
+st_write(edellauv_skog_arter_fp, temp_file, layer = "edellauvskog_fremmedarter", append=F)
+st_write(HB13_edellauv_god, temp_file, layer = "HB13_edellauv_god_tilstand", append=F)
+st_write(HB13_edellauv_fp, temp_file, layer = "HB13_edellauv_forbedringspotensial", append=F)
+st_write(MI_edellauv_god, temp_file, layer = "MI_edellauv_god_tilstand", append=F)
+st_write(MI_edellauv_fp, temp_file, layer = "MI_edellauv_forbedringspotensial", append=F)
 
 file.copy(temp_file, final_file, overwrite = TRUE)
 ```
