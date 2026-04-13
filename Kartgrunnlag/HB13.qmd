@@ -35,7 +35,10 @@ Slå sammen de to datasettene basert på ID og eksporter.
 
 ```{r}
 HB13_faktaark <- HB13 %>%
-  left_join(fa_hb13) 
+  left_join(fa_hb13, by = join_by(identifikasjon_lokalId)) %>%
+  # Fjern de kolonnene som er duplisert
+  select(-ends_with(".y")) %>%
+  rename_with(~ gsub("\\.x$", "", .x))
 
 temp_file <- "~/Mounts/scratch/tmp_ida/gpkg/HB13_faktaark.gpkg" 
 final_file <- "/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Data/Kartlagte naturtyper/HB13/HB13_faktaark.gpkg" 
