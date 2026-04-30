@@ -8,11 +8,23 @@ editor: visual
 Load required libraries
 
 ```{r echo=FALSE}
+library(dplyr)
 library(sf)
 library(terra)
-library(dplyr)
+library(rgrass)
 library(mapview)
-library(rmapshaper)
+```
+
+Set up grass environment
+
+```{r echo=FALSE}
+
+# connect to GRASS
+NinaR::grassConnect(location = "ETRS_32N", mapset = "p_Restaurerbar_Akershus")
+
+execGRASS("g.region", vector = "akershus_vect", flags = "p", res = "5")
+execGRASS("g.remove", type = "raster", name = "MASK", flags = "f")
+
 ```
 
 Import data
@@ -30,68 +42,210 @@ ga <- st_read("/data/R/GeoSpatialData/LandCover/Norway_Grå_Arealer_versjon1/Ori
   st_transform(25832)
 
 # jordkvalitet
-jk <- st_read("/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Data/Kantsoner/jordkvalitet.gpkg", layer = "jordkvalitet") # 1 = svært god, 2 = god, 3 = mindre god
+jk <- st_read("/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Data/Kantsoner/jordkvalitet.gpkg", layer = "jordkvalitet") %>% 
+  mutate(jordkvalitet = as.numeric(jordkvalitet))# 1 = svært god, 2 = god, 3 = mindre god
 
+# invasive species
+invasive <- rast("/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Data/Kantsoner/invasive_neighborhood.tif")
 ```
 
 Reclassify AR5
 
-```{r}
+```{r echo=FALSE}
 
 # classify fulldyrka jord and overflatedyrka jord as åker
 # everything else as NA
-ar5 <- ar5 %>%
+aker <- ar5 %>%
   mutate(kantklasse = if_else(arealtype %in% c("21", "22", "23"), "Aker", NA_character_)) %>%
-  filter(!is.na(kantklasse)) %>% 
-  st_make_valid
+  filter(!is.na(kantklasse)) %>%
+  st_make_valid() %>%
+  st_cast("MULTIPOLYGON") %>%
+  st_cast("POLYGON") %>%
+  mutate(field_id = row_number())
 
-# dissolve into a single geometry
-aker <- ar5 %>% 
-  summarize()
-```
-
-Buffer polygons and get difference
-
-```{r}
-
-aker_buff <- aker %>% 
-  st_buffer(15)
-
-aker_kant <- ms_erase(aker_buff, aker)
-```
-
-Remove grey area
-
-```{r}
-
-aker_kant_no_ga <- ms_erase(aker_kant, ga) %>% 
+skog <- ar5 %>%
+  filter(arealtype == 30) |> 
+  rename(geom = SHAPE) |> 
   st_make_valid()
 
+rm(ar5)
 ```
 
-Rasterize and get pollinator values
+Write vector data to grass mapset
 
-```{r}
+```{r echo=FALSE}
 
-kant_vect <- vect(aker_kant_no_ga)
-
-kant_rast <- rasterize(kant_vect, poll, field = 1, background = 0,
-                       touches = TRUE)
-
-kant_poll <- ifel(kant_rast == 1, poll, NA)
+write_VECT(vect(aker), "aker_vect", flags = "overwrite")
+write_VECT(vect(skog), "skog_vect")
+write_VECT(vect(ga), "graareal_vect")
+write_VECT(vect(jk), "jordkvalitet_vect", flags = "overwrite")
 ```
 
-Rasterize jordkvalitet
+Rasterize vector data
 
-```{r}
+```{r echo=FALSE}
 
-# NB: this is only capturing field margins, so not likely representative of greater soil quality of the field- need to re-think the approach (there is no category 3 here)
-jk_vect <- vect(jk)
+# Åker
+execGRASS("v.to.rast",
+          input = "aker_vect",
+          output = "aker_rast",
+          use = "cat",
+          flags = "overwrite")
 
-jk_rast <- rasterize(jk_vect, poll, field = "jordkvalitet", touches = TRUE, fun = "max")
+# Skog
+execGRASS("v.to.rast",
+          input = "skog_vect",
+          output = "skog_rast",
+          use = "val",
+          value = 1,
+          flags = "overwrite")
 
-kant_jk <- ifel(kant_rast == 1, jk_rast, NA)
+# Gråareal
+execGRASS("v.to.rast",
+          input = "graareal_vect",
+          output = "graareal_rast",
+          use = "val",
+          value = 1,
+          flags = "overwrite")
+
+# Jordkvalitet
+execGRASS("v.to.rast",
+          input = "jordkvalitet_vect",
+          output = "jordkvalitet_rast",
+          use = "attr",
+          attribute_column = "jordkvalitet",
+          flags = "overwrite")
+
+# Grow distance from åker rast
+execGRASS("r.grow.distance",
+          input = "aker_rast",
+          distance = "dist_to_aker",
+          value = "nearest_field_id",
+          flags = "overwrite")
+
+# create a field margin raster & remove areas overlapping gråareal and skog
+execGRASS("r.mapcalc",
+          expression = "kant_rast = if(dist_to_aker <= 15 && isnull(aker_rast) && isnull(graareal_rast) && isnull(skog_rast), nearest_field_id, null())",
+          flags = "overwrite")
 
 ```
 
-Where jordkvalitet = 2 and polinator high
+Zonal extraction of relevant values
+
+```{r echo=FALSE}
+
+kant_id <- read_RAST("kant_rast")
+jk_rast <- read_RAST("jordkvalitet_rast")
+
+# handle mask values in invasive raster
+inv_clean <- as.numeric(invasive)
+inv_clean[inv_clean > 1000] <- NA
+
+# resample rasters to match åker kant
+inv_a <- resample(inv_clean, kant_id, method = "near")
+poll_a <- resample(poll, kant_id, method = "bilinear")
+jk_a   <- resample(jk_rast, kant_id, method = "near")
+
+# extract summary values 
+inv_max  <- zonal(inv_a, kant_id, fun = "max", na.rm = TRUE)
+poll_mean <- zonal(poll_a, kant_id, fun = "mean", na.rm = TRUE)
+jk_dom <- zonal(jk_a, kant_id, fun = "modal", na.rm = TRUE)
+jk_mean   <- zonal(jk_a, kant_id, fun = "mean", na.rm = TRUE)
+
+```
+
+Polygonize output
+
+```{r echo=FALSE}
+
+execGRASS("r.to.vect",
+          input = "kant_rast",
+          output = "kant_vect",
+          type = "area",
+          flags = "overwrite")
+
+# mapping shows areas covered by skog as an artifact of the r.to.vect process; need to remove
+execGRASS("v.overlay",
+          ainput = "kant_vect",
+          binput = "skog_vect",
+          operator = "not",
+          output = "kant_vect_clean",
+          flags = "overwrite")
+
+execGRASS("v.out.ogr",
+          input = "kant_vect_clean",
+          output = "/data/scratch/tmp_jenny/gpkg/kant_vect_clean.gpkg",
+          format = "GPKG",
+          flags = "overwrite")
+
+kant_poly <- st_read("/data/scratch/tmp_jenny/gpkg/kant_vect_clean.gpkg")
+
+# NB: I lost my 'value' column after the overlay - need to fix!
+```
+
+Build summary data
+
+```{r echo=FALSE}
+
+poll_mean <- poll_mean %>%
+  setNames(c("field_id", "poll_mean"))
+
+inv_max <- inv_max %>%
+  setNames(c("field_id", "inv_max"))
+
+jk_dom <- jk_dom %>%
+  setNames(c("field_id", "jk_dom"))
+
+summ <- poll_mean %>%
+  left_join(inv_max, by = "field_id") %>%
+  left_join(jk_dom, by = "field_id")
+
+# join with polygons
+kant_poly <- kant_poly %>%
+  rename(field_id = a_value)
+
+kant_vars <- kant_poly %>%
+  left_join(summ, by = "field_id")
+```
+
+Find suitable polygons
+
+```{r echo=FALSE}
+
+# remove polygons lacking values
+kant_filtered <- kant_vars %>% 
+  filter(!is.na(poll_mean),
+         !is.na(inv_max),
+         !is.na(jk_dom)) %>% 
+  mutate(area = as.numeric(st_area(.))) %>% 
+  filter(area >= 1000)
+
+# summary values
+summary(kant_filtered$poll_mean)
+summary(kant_filtered$inv_max)
+summary(kant_filtered$jk_dom)
+
+# using mean values for pollinators & invasive, plus worst soil class
+# this looks terrible after removing skog
+kant_all <- kant_filtered %>% 
+  filter(jk_dom >= 2,
+         inv_max >= 2,
+         poll_mean >= 3) # n = 65
+mapview(kant_all, zcol = "poll_mean")
+
+# NB: talk to Astrid regarding filtering criteria before finalizing
+```
+
+Export data
+
+```{r echo=FALSE}
+
+# write to scratch temporarily and copy to P drive
+out_gpkg <- "/data/scratch/tmp_jenny/gpkg/kantsoner_langs_aker.gpkg"
+st_write(kant_all, out_gpkg, layer = "kantsoner_langs_aker")
+
+file.copy(
+  from = out_gpkg,
+  to = "/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Kriteriekart/kantsoner_langs_aker.gpkg",
+  overwrite = TRUE)
+```

@@ -21,7 +21,8 @@ Import data
 
 # veier
 veier <- st_read("/data/R/GeoSpatialData/Topography/Norway_N50/Original/N50 Kartdata FGDB-format/Basisdata_32_Akershus_25832_N50Kartdata_FGDB/Basisdata_32_Akershus_25832_N50Kartdata_FGDB.gdb", layer = "N50_Samferdsel_senterlinje") %>% 
-  filter(typeveg == "enkelBilveg") %>% 
+  filter(typeveg == "enkelBilveg",
+         vegkategori != "P") %>%  # remove private roads
   mutate(road_id = row_number()) # assign unique id (missing objectid)
 
 # natural land cover (arealtype is skog, åpenfastmark, myr or ferskvann)
@@ -30,14 +31,10 @@ natur <- st_read("/data/R/GeoSpatialData/Topography/Norway_FKB/Original/FKB-AR5 
 
 # Canopy Height Model classification was done in Google Earth Engine:
 # https://code.earthengine.google.com/bae90ed14775ac4adac711981634e6e4
-
 chm_bin <- rast("/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Data/Kantsoner/akershus_chm_binary_10m.tif")
 
 # Pollinator prediction raster (from Markus)
 poll <- rast("/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Data/Kantsoner/polliland_akershus.tif")
-
-# Invasive species raster (created in neighborhood_analysis_invasive.qmd)
-invasive <- rast("/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Data/Kantsoner/invasive_neighborhood.tif")
 ```
 
 Find road segments that overlap natural land cover types
@@ -47,7 +44,7 @@ Find road segments that overlap natural land cover types
 # switch to GEOS engine for single-sided buffers
 sf_use_s2(FALSE)
 
-# create left & right buffers
+# create left & right buffers (20 m)
 veier_left  <- st_buffer(veier,  dist = 20,  singleSide = TRUE)
 veier_right <- st_buffer(veier,  dist = -20, singleSide = TRUE)
 
@@ -98,7 +95,7 @@ veier_filter <- veier_natur_vect %>% st_as_sf() %>% filter(veg_low_prop > 0.75)
 
 ```
 
-Identify areas with high pollinator potential and invasive species present
+Identify areas with high pollinator potential
 
 ```{r echo=FALSE}
 
@@ -108,34 +105,25 @@ veier_filter_vect <- vect(veier_filter)
 res_poll <- extract(poll, veier_filter_vect, fun = mean, na.rm = TRUE)
 veier_filter_vect$mean_poll <- res_poll[,2]
 
-# extract mean invasive
-res_inv  <- extract(invasive, veier_filter_vect, fun = mean, na.rm = TRUE)
-veier_filter_vect$mean_invasive <- res_inv[,2]
-
 # convert to sf
 veier_sel_sf <- st_as_sf(veier_filter_vect)
 
 mapview(veier_sel_sf, zcol = "mean_poll")
-mapview(veier_sel_sf, zcol = "mean_invasive")
 
 range(veier_sel_sf$mean_poll, na.rm = TRUE) # 1.214054 13.129421
-range(veier_sel_sf$mean_invasive) # 0.00000 87.63636
-
 ```
 
 Find suitable areas
 
 ```{r echo=FALSE}
 
-# define some rubric of mean poll value >= X and mean invasive value >= Y
+# define some rubric of mean poll value >= X 
 hist(veier_sel_sf$mean_poll)
-hist(veier_sel_sf$mean_invasive)
 summary(veier_sel_sf$mean_poll) # median 4.65, mean 5
-summary(veier_sel_sf$mean_invasive) # median 0 mean 2.1
 
 # use mean values
 veier_suitable <- veier_sel_sf %>% 
-  filter(mean_poll >= 5 & mean_invasive >= 2.1) # n = 499
+  filter(mean_poll >= 5) # n = 1703
 
 # identify intersecting polygons
 nb <- st_intersects(veier_suitable)
@@ -151,8 +139,7 @@ veier_dissolved <- veier_suitable %>%
   mutate(area = as.numeric(st_area(.))) %>% 
   mutate(group_id = groups) %>% 
   group_by(group_id) %>% 
-  summarise(mean_invasive = weighted.mean(mean_invasive, area, na.rm = TRUE),
-            mean_poll = weighted.mean(mean_poll, area, na.rm = TRUE)) %>% 
+  summarise(mean_poll = weighted.mean(mean_poll, area, na.rm = TRUE)) %>% 
   mutate(area = as.numeric(st_area(.)))
 
 ```
@@ -162,8 +149,8 @@ Filter for areas 1000 sq. m or larger
 ```{r echo=FALSE}
 
 veier_final <- veier_dissolved %>% 
-  filter(area >= 1000) # n = 263
-mapview(veier_final, zcol = "mean_invasive")
+  filter(area >= 1000) # n = 337
+mapview(veier_final, zcol = "mean_poll")
 
 ```
 
@@ -172,12 +159,12 @@ Export data
 ```{r echo=FALSE}
 
 # write to scratch temporarily and copy to P drive
-out_gpkg <- "/data/scratch/tmp_jenny/gpkg/kantsoner_vei_natur.gpkg"
-st_write(veier_final, out_gpkg, layer = "kantsoner_vei_natur")
+out_gpkg <- "/data/scratch/tmp_jenny/gpkg/kantsoner_vei_natur_v2.gpkg"
+st_write(veier_final, out_gpkg, layer = "kantsoner_vei_natur_v2")
 
 file.copy(
   from = out_gpkg,
-  to = "/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Kriteriekart/kantsoner_vei_natur.gpkg",
+  to = "/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Kriteriekart/kantsoner_vei_natur_v2.gpkg",
   overwrite = TRUE)
 
 ```

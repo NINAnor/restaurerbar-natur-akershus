@@ -28,8 +28,9 @@ akershus <- st_read("/data/R/GeoSpatialData/AdministrativeUnits/Norway_Administr
 
 # FKB-Vann (buffer by 10 m) 
 vassdrag <- st_read("/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Data/Kantsoner/FKB-Vann_Akershus.gpkg", layer = "fkbvann") %>% 
-  select(OBJECTID, objtype) %>% 
-  filter(objtype %in% c("ElvBekk", "Elvekant", "Innsjøkant")) %>% 
+  select(OBJECTID, objtype, medium) %>% 
+  filter(objtype %in% c("ElvBekk", "Elvekant", "Innsjøkant"),
+         medium != "U") %>% 
   st_buffer(10)
 
 # Forest data (AR5)
@@ -44,8 +45,10 @@ fjell <- st_read("/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Da
   st_filter(akershus, .predicate = st_intersects) %>% 
   st_intersection(akershus)
 
-# invasive species raster
-invasive <- rast("/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Data/Kantsoner/invasive_neighborhood.tif")
+# add CHM and remove areas with vegetation above 2 m
+# Canopy Height Model classification was done in Google Earth Engine:
+# https://code.earthengine.google.com/bae90ed14775ac4adac711981634e6e4
+chm_bin <- rast("/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Data/Kantsoner/akershus_chm_binary_10m.tif")
 
 # pollinator prediction raster
 poll <- rast("/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Data/Kantsoner/polliland_akershus.tif")
@@ -78,7 +81,7 @@ Set up db connection and parameters
 ```{r}
 
 con <- dbConnect(duckdb())
-dbExecute(con, "INSTALL spatial FROM core_nightly; LOAD spatial;")
+dbExecute(con, "INSTALL spatial; LOAD spatial;")
 
 skog_path <- "/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Data/Kantsoner/skog.shp"
 vass_path <- "/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Data/Kantsoner/vassdrag.shp"
@@ -119,7 +122,7 @@ query <- "
 "
 
 res <- dbSendQuery(con, query)
-vass_outside_skog <- dbFetch(res) # n = 23,278
+vass_outside_skog <- dbFetch(res) # n = 21, 241
 dbClearResult(res)
 
 # convert to sf object
@@ -132,47 +135,56 @@ vass_kant_uten_skog <- vass_outside_skog %>%
   st_sf()
 ```
 
-Extract invasive species data
+Find areas that overlap CHM raster with '1' values- less than 2 m vegetation
 
 ```{r echo=FALSE}
 
-vkus_vect_inv <- vect(vass_kant_uten_skog)
+# trying zonal statistics with rasterized polygons instead
+kant_uten_skog_vect <- vect(vass_kant_uten_skog)
 
-# extract mean invasive
-res_inv  <- extract(invasive, vkus_vect_inv, fun = mean, na.rm = TRUE)
-vkus_vect_inv$mean_invasive <- res_inv[,2]
+# give each polygon an ID
+kant_uten_skog_vect$id <- 1:nrow(kant_uten_skog_vect)
 
-# convert to sf
-vkus_inv_sf <- st_as_sf(vkus_vect_inv)
+# rasterize polygons to match CHM
+pol_rast <- rasterize(kant_uten_skog_vect, chm_bin, field = "id")
+
+# get CHM proportion over each cell
+z <- zonal(chm_bin, pol_rast, fun = "mean", na.rm = TRUE)
+
+# assign value
+kant_uten_skog_vect$veg_low_prop <- 
+  z$low_veg_binary[match(kant_uten_skog_vect$id, z$id)]
+
+# filter for polygons that contain at least 75% veg under 2 m
+kant_filter <- st_as_sf(kant_uten_skog_vect) %>%
+  filter(veg_low_prop > 0.75) # n = 12,476
+
 ```
 
 Extract pollinator data
 
 ```{r echo=FALSE}
 
-vkus_vect_poll <- vect(vkus_inv_sf)
+vkus_vect_poll <- vect(kant_filter)
 
 # extract mean invasive
 res_poll  <- extract(poll, vkus_vect_poll, fun = mean, na.rm = TRUE)
 vkus_vect_poll$mean_poll <- res_poll[,2]
 
 # convert to sf
-vkus_combined_sf <- st_as_sf(vkus_vect_poll)
+vkus_sf <- st_as_sf(vkus_vect_poll)
 ```
 
 Find most suitable areas
 
 ```{r echo=FALSE}
 
-hist(vkus_combined_sf$mean_invasive)
-hist(vkus_combined_sf$mean_poll)
-summary(vkus_combined_sf$mean_invasive) # median 0, mean 0.96
-summary(vkus_combined_sf$mean_poll) # median 3.52, mean 3.7
+hist(vkus_sf$mean_poll)
+summary(vkus_sf$mean_poll) # median 3.52, mean 3.7
 
-# filter for areas with higher potential for pollinators and invasive species
-vkus_suitable <- vkus_combined_sf %>% 
-  filter(mean_invasive >= 0.96,
-         mean_poll >= 3.7) %>% 
+# filter for areas using mean value
+vkus_suitable <- vkus_sf %>% 
+  filter(mean_poll >= 3.6) %>% 
   st_make_valid()
 
 # identify intersecting polygons
@@ -189,9 +201,8 @@ vkus_dissolved <- vkus_suitable %>%
   mutate(area = as.numeric(st_area(.))) %>% 
   mutate(group_id = groups) %>% 
   group_by(group_id) %>% 
-  summarise(mean_invasive = weighted.mean(mean_invasive, area, na.rm = TRUE),
-            mean_poll = weighted.mean(mean_poll, area, na.rm = TRUE)) %>% 
-  mutate(area = as.numeric(st_area(.)))
+  summarise(mean_poll = weighted.mean(mean_poll, area, na.rm = TRUE)) %>% 
+  mutate(area = as.numeric(st_area(.))) 
 ```
 
 Filter for areas 1000 sq. m or larger
@@ -199,8 +210,14 @@ Filter for areas 1000 sq. m or larger
 ```{r echo=FALSE}
 
 vkus_filtered <- vkus_dissolved %>% 
-  filter(area >= 1000) # n = 513
-mapview(vkus_filtered)
+  filter(area >= 1000) # n = 1208
+
+# filter vass kant that overlap for visualization
+vass_filter <- vassdrag |> 
+  st_filter(vkus_filtered, .predicate = st_intersects)
+
+# map shows they overlap
+mapview(vkus_filtered, zcol = "mean_poll") + mapview(vass_filter, col.regions = "orange")
 ```
 
 Export data
@@ -208,12 +225,12 @@ Export data
 ```{r echo=FALSE}
 
 # write to scratch temporarily and copy to P drive
-out_gpkg <- "/data/scratch/tmp_jenny/gpkg/vassdrag_kant_lavland_uten_vegetasjon.gpkg"
-st_write(vkus_filtered, out_gpkg, layer = "kantsoner_vassdrag")
+out_gpkg <- "/data/scratch/tmp_jenny/gpkg/vassdrag_kant_lavland_uten_vegetasjon_v2.gpkg"
+st_write(vkus_filtered, out_gpkg, layer = "kantsoner_vassdrag_v2")
 
 file.copy(
   from = out_gpkg,
-  to = "/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Kriteriekart/vassdrag_kant_lavland_uten_vegetasjon.gpkg",
+  to = "/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Kriteriekart/vassdrag_kant_lavland_uten_vegetasjon_v2.gpkg",
   overwrite = TRUE)
 
 ```

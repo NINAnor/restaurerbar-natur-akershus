@@ -20,10 +20,12 @@ Import data
 
 ```{r echo=FALSE}
 
+# Akershus boundary
+akershus <- st_read("/data/R/GeoSpatialData/AdministrativeUnits/Norway_AdministrativeUnits/Original/Norway_County/versjon2024/Administrative_enheter_fylker_2024_FGDB-format/Basisdata_32_Akershus_25832_Fylker2024_FGDB.gdb", layer = "fylke")
+
 # Vann-Nett report of streams physically altered for agriculture or roads
 vann_nett <- read_excel("/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Data/Ferskvann/vannnett_eksport.xlsx") %>% 
-  filter(`Pressure type (pressures)` %in% c("Physical alteration for agriculture",
-                                            "Physical intervention road (road in watercourse, culvert, etc.)")) %>% 
+  filter(`Pressure type (pressures)` == "Physical alteration for agriculture") %>% 
   rename(waterbody_id = `Waterbody id`) %>% 
   group_by(waterbody_id) %>% 
   slice(1) %>% 
@@ -33,17 +35,35 @@ vann_nett <- read_excel("/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/
 # https://kartkatalog.miljodirektoratet.no/Dataset/Details/3061 
 vann_for <- st_read("/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Data/Ferskvann/Vannforekomster_32_akershus_25832_FILEGDB.gdb", layer = "VannforekomstElv")
 
+# NVE elvenett
+elv_nett <- st_read("/data/R/GeoSpatialData/Hydrography/Norway_RiverNetwork/Original/NVE_Elvenett_2026/NVEData.gdb", layer = "Elvenett") %>% 
+  st_transform(25832) %>% 
+  st_filter(akershus, .predicate = st_intersects) %>% 
+  st_intersection(akershus)
+
 ```
 
 Join geometry to vann_nett data
 
 ```{r echo=FALSE}
 
-vann_sf <- vann_nett %>% 
+vann_nett_sf <- vann_nett %>% 
   left_join(vann_for, by = c("waterbody_id" = "identifikasjon_lokalId")) %>% 
-  st_as_sf(sf_column_name = "SHAPE", crs = 25832)
+  st_as_sf(sf_column_name = "SHAPE", crs = 25832) 
 
-mapview(vann_sf)
+```
+
+Buffer vann_nett & elvenett, intersect and select elvenett geometry
+
+```{r echo=FALSE}
+
+vn_buff <- st_buffer(vann_nett_sf, 5)
+en_buff <- st_buffer(elv_nett, 5)
+
+en_overlap <- en_buff %>% 
+  st_filter(vn_buff, .predicate = st_intersects)
+
+# this is not helpful- going to have to do some more exploration
 ```
 
 Export
