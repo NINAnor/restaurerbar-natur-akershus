@@ -179,8 +179,6 @@ execGRASS("v.out.ogr",
           flags = "overwrite")
 
 kant_poly <- st_read("/data/scratch/tmp_jenny/gpkg/kant_vect_clean.gpkg")
-
-# NB: I lost my 'value' column after the overlay - need to fix!
 ```
 
 Build summary data
@@ -226,14 +224,11 @@ summary(kant_filtered$inv_max)
 summary(kant_filtered$jk_dom)
 
 # using mean values for pollinators & invasive, plus worst soil class
-# this looks terrible after removing skog
 kant_all <- kant_filtered %>% 
   filter(jk_dom >= 2,
-         inv_max >= 2,
-         poll_mean >= 3) # n = 65
+         inv_max >= 2.5,
+         poll_mean >= 3) # n = 228
 mapview(kant_all, zcol = "poll_mean")
-
-# NB: talk to Astrid regarding filtering criteria before finalizing
 ```
 
 Export data
@@ -241,11 +236,11 @@ Export data
 ```{r echo=FALSE}
 
 # write to scratch temporarily and copy to P drive
-out_gpkg <- "/data/scratch/tmp_jenny/gpkg/kantsoner_langs_aker.gpkg"
-st_write(kant_all, out_gpkg, layer = "kantsoner_langs_aker")
+out_gpkg <- "/data/scratch/tmp_jenny/gpkg/kantsoner_langs_aker_v2.gpkg"
+st_write(kant_all, out_gpkg, layer = "kantsoner_langs_aker_v2")
 
 file.copy(
   from = out_gpkg,
-  to = "/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Kriteriekart/kantsoner_langs_aker.gpkg",
+  to = "/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Kriteriekart/kantsoner_langs_aker_v2.gpkg",
   overwrite = TRUE)
 ```
