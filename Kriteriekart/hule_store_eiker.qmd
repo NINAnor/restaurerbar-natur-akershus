@@ -3,3 +3,509 @@ title: "hule_store_eiker"
 format: html
 ---
 
+```{r, echo=FALSE, results='hide'}
+
+# Sett tegnkodingen for teksthåndtering til norsk bokmål med UTF-8-encoding
+Sys.setlocale("LC_CTYPE", "nb_NO.UTF-8")
+
+# Last inn pakker
+packages <- c("dplyr","sf", "mapview", "tidyverse", "nngeo",
+              "purrr", "readxl")
+sapply(packages, require, character.only = TRUE)
+```
+
+## Last inn og klargjør data
+
+Datakildene som brukes:
+
+-   Akershus fylkesgrense og kommuner
+
+### Akershus
+
+```{r}
+# Trenger også avgrensninger 
+fylkepath <- "/data/R/GeoSpatialData/AdministrativeUnits/Norway_AdministrativeUnits/Original/Norway_County/versjon2024/Administrative_enheter_fylker_2024_FGDB-format/Basisdata_32_Akershus_25833_Fylker2024_FGDB.gdb"
+st_layers(fylkepath)
+akerhusgrense <- st_read(fylkepath, layer="fylke") 
+
+kommuner <- st_read("/data/R/GeoSpatialData/AdministrativeUnits/Norway_AdministrativeUnits/Original/Norway_Municipalities/versjon2024/Administrative_enheter_kommuner_2024_FGDB-format/Basisdata_0000_Norge_25833_Kommuner2024_FGDB.gdb",
+        layer="kommune")
+
+# Kun velg de som er innenfor Akershus
+akerhus_sf <- kommuner %>%
+  st_intersection(akerhusgrense) %>%
+  st_transform (25832) %>%
+  select(kommunenavn)
+
+```
+
+### Naturtyper HB13
+
+```{r}
+
+# Datasettet viser naturtyper kartlagt etter HB13 med faktaark
+path <- "/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Data/Kartlagte naturtyper/HB13/HB13_faktaark.gpkg"
+
+naturtyper_hb13 <- st_read(path)
+
+# Datasett med kun HB13 som har forbedringspotensial
+path <- "/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Data/Kartlagte naturtyper/HB13/HB13_forbedringspotensial.gpkg"
+
+naturtyper_hb13_fp <- st_read(path)
+```
+
+### Miljødirektoratets instruks (dekningskart)
+
+```{r}
+path <- "/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Data/Kartlagte naturtyper/Input_filer/Naturtyper_nin_32_akershus_25832_FILEGDB.gdb"
+
+st_layers(path)
+
+# Kartlagte naturtyper
+naturtyper_MI <- st_read(path, layer = "naturtyper_nin_omr")
+```
+
+### Artsobservasjoner av fremmedarter
+
+```{r}
+fremmedarter <- read_csv("/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Data/Artsobservasjoner/Fremmedarter/artsobs_fremmed.csv") %>%
+   st_as_sf(coords = c("X_32", "Y_32"), crs = 25832) 
+```
+
+### Artsobservasjoner av biller, sopp og lav
+
+```{r}
+
+artskartdata <- read.csv("/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2025/Akershus_restaurering_Ida/Data/Artskart/ahus_biller_sopp_lav.csv", sep=";") %>%
+  st_as_sf(coords=c("east","north"), crs=25833) %>%
+  st_transform(25832)
+```
+
+### Indikatorlister for arter
+
+```{r}
+
+#####      Artsliste Anne ST 2010
+
+# Path to your Excel file
+file_path <- "/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2025/Akershus_restaurering_Ida/Data/Artslister/Artslister Anne ST 2010.xlsx"
+
+# Get all sheet names
+sheet_names <- c("Biller","Lav","Vedboende sopp","Mykorrhiza")
+
+# Read each sheet as a single-column data frame, no column names
+all_data <- map(sheet_names, ~ {
+  read_excel(file_path, sheet = .x, col_names = FALSE) %>%
+    mutate(sheet = .x)
+})
+# Combine all into one data frame
+anneST_artsliste <- bind_rows(all_data) %>%
+  # Endre navn på første og andre kolonne
+  rename(validScientificName=1,
+         artsgruppe=sheet) 
+
+
+#####      Dødbasen biller
+
+biller <- read.csv("/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2025/Akershus_restaurering_Ida/Data/Artslister/DödBasenBiller_RMJ(Coleoptera).csv",
+                   sep=";") %>%
+  select(Riktig.navnADB_05.2018, Que) %>%
+  #Kun de med x i Que-kolonnen
+  filter(grepl("x", Que))
+```
+
+### AR5
+
+```{r}
+path <- "/data/R/GeoSpatialData/Topography/Norway_FKB/Original/FKB-AR5 FGDB-format/Basisdata_32_Akershus_25832_FKB-AR5_FGDB.gdb"
+st_layers(path)
+ar5_akershus <- st_read(path,
+                     layer= "fkb_ar5_omrade")
+```
+
+## Avgrens dataene
+
+### Naturtyper HB13
+
+```{r}
+
+# Typer med eik
+utforming_eik <- data.frame(utformingk="D1207",
+                            utformingn="Store gamle trær - Eik"
+                            )
+
+## Hule eiker
+# Må avgrense med intersection
+naturtyper_hb13_huleeiker <- naturtyper_hb13  %>%
+  st_intersection(akerhus_sf) %>%
+  # Velg ut kun hule eiker
+  filter(bmUtvalgtNaturtype == "UN03") %>%
+  # Velg ut kolonner
+  #select(identifikasjon_lokalId, omradenavn, faktaark, kommunenavn, registreringsdato, nøyaktighetsklasse,
+         #bmVerdi, naturtype, naturtypeUtforming, bmUtvalgtNaturtype, forvaltningsavtale, forvaltningsplan) %>%
+  rename(kartleggingsdato=registreringsdato,
+         områdenavn=omradenavn) %>%
+  mutate(kartleggingsmetodikk="HB13") %>%
+  # Noen polygoner kan være i flere kommuner. Setter komma mellom kommunene
+  group_by(identifikasjon_lokalId) %>%
+  summarise(across(everything(), ~ paste(unique(.), collapse = ","), .names = "{col}"), .groups = "drop")
+
+
+## Eikeskog
+# Må avgrense med intersection
+naturtyper_hb13_eikeskog <- naturtyper_hb13 %>%
+  st_intersection(akerhus_sf) %>%
+  # Velger her kun de som har utforming som eik
+  filter(naturtypeUtforming %in% utforming_eik$utformingk) %>%
+  # Fjern de med hule eiker ettersom disse er i det andre datasettet for hb13
+  filter(! bmUtvalgtNaturtype == "UN03")  %>%
+  # Velg ut kolonner
+  #select(identifikasjon_lokalId, omradenavn, faktaark, kommunenavn, registreringsdato, nøyaktighetsklasse,
+         #bmVerdi, naturtype, naturtypeUtforming) %>%
+  rename(kartleggingsdato=registreringsdato,
+         områdenavn=omradenavn) %>%
+  mutate(kartleggingsmetodikk="HB13") %>%
+  # Noen polygoner kan være i flere kommuner. Setter komma mellom disse
+  group_by(identifikasjon_lokalId) %>%
+  summarise(across(everything(), ~ paste(unique(.), collapse = ","), .names = "{col}"), .groups = "drop")
+
+# Slå datasettene sammen
+hb13_sf <- rbind(naturtyper_hb13_huleeiker,naturtyper_hb13_eikeskog) %>%
+  arrange()
+```
+
+### Naturtyper MI
+
+```{r}
+## Hule eiker
+naturtyper_MI_huleeiker <- naturtyper_MI %>%
+  # Må avgrense med intersection
+  st_intersection(akerhus_sf) %>%
+  # Velger her kun de som har utforming som hul eik
+  filter(naturtype %in% "Hule eiker") %>%
+  # Velg ut kolonner
+  select(identifikasjon_lokalId, områdenavn, faktaark, kommunenavn, kartleggingsdato, nøyaktighetsklasse,
+         naturmangfold, naturmangfoldBeskrivelse, tilstand, tilstandBeskrivelse, ninBeskrivelsesvariable, lokalitetskvalitet) %>%
+  mutate(kartleggingsmetodikk="NiN-MI") %>%
+  # Noen polygoner kan være i flere kommuner. Setter komma mellom disse
+  group_by(identifikasjon_lokalId) %>%
+  summarise(across(everything(), ~ paste(unique(.), collapse = ","), .names = "{col}"), .groups = "drop")
+
+```
+
+## Finn kartlagte store og hule eiker med forbedringspotensial
+
+### HB13
+
+```{r}
+hb13_fb <- hb13_sf %>%
+  #filter(
+  #  if_all(
+  #    c(paavirkning, fremmede_arter, raad_om_skjoetsel_og_hensyn),
+  #    ~ !is.na(.) | trimws(.) != ""
+  #  )
+  #) %>%
+  mutate(
+    tekst_lc = str_to_lower(raad_om_skjoetsel_og_hensyn),
+    restaurering_flagg = str_detect(
+      paste(tekst_lc),
+      paste(
+        c(
+          "fjern",
+          "rydd",
+          "bekjemp",
+          "fremmed|svartelisteart",
+          "gjengro",
+          "kratt",
+          "busk",
+          "oppslag",
+          "gran",
+          "fristil",
+          "restaurer",
+          "skjøtt"
+        ),
+        collapse = "|"
+      )) &
+      # Markerer de som helst ikke skal gjøres noe med som ikke restaurerbar for å prioritere de som burde restaureres
+      ! str_detect(
+        paste(tekst_lc),
+        paste0("fri utvikling|i fred|ikke fjern")
+      ),
+    fremmede_flagg =
+      !str_detect(fremmede_arter, "Ingen|Ikke relevant|NA")
+  ) %>%
+  mutate(restaurerbar = ifelse(restaurering_flagg | fremmede_flagg,
+                               "ja", NA)) %>%
+    select(-c(tekst_lc, restaurering_flagg, fremmede_flagg))
+  
+
+```
+
+### MI
+
+Må splitte opp NiN variabler for å hente ut de som sier noe om gjengroing.
+
+```{r}
+naturtyper_MI_huleeiker_fp <- naturtyper_MI_huleeiker %>%
+  separate_rows(ninBeskrivelsesvariable, sep = ",") %>%
+  separate(ninBeskrivelsesvariable, into = c("name", "value"), sep = "_") %>%
+  pivot_wider(
+    names_from = name,
+    values_from = value,
+    values_fn = ~paste(., collapse = "; "),
+    values_fill = list(value = NA)
+  ) %>%
+  # Noen celler inneholder doble verdier. Slett delen etter ";"
+  mutate(across(c("PRSP", "PRRL-CR", "PRRL-EN", "PRSY", "PRRL-VU", "PRRL-NT", "PRSH", "PRRL-DD"),
+                ~sub(";.*", "", as.character(.))),
+           # Marker de som har moderat og dårlig tilstand som restaurerbar (altså, ikke god)
+         restaurerbar = ifelse(tilstand != "god", "ja", NA)
+         )
+
+```
+
+## Slå sammen HB13 og MI - hule eiker
+
+```{r}
+
+## Hule eiker datasett
+
+# Sf
+naturtyper_huleeiker_sf <- rbind(hb13_fb %>% 
+                                   select(identifikasjon_lokalId) ,
+                              naturtyper_MI_huleeiker_fp %>% 
+                                select(identifikasjon_lokalId)%>%
+                                   rename(geom="SHAPE")
+                              ) %>%
+  arrange()
+
+# Df
+naturtyper_huleeikerdf <- hb13_fb %>%
+  st_drop_geometry() %>%
+  full_join(naturtyper_MI_huleeiker_fp %>%
+              st_drop_geometry())  %>%
+  arrange()
+
+# Slå sammen til en sf
+naturtyper_huleeiker <- cbind(naturtyper_huleeiker_sf, 
+                              naturtyper_huleeikerdf %>% 
+                                select(-identifikasjon_lokalId)
+                              )
+
+```
+
+## Areal
+
+I HB13 varierer det hvor stort et polygon er. For polygoner mindre enn 706,5 m2 (MI hul eik utfigureres som 15 m radius),henter jeg ut senterpunkt og lagger buffer på 15 m radius.
+
+```{r}
+
+##### Areal enkeltpolygon
+naturtyper_huleeiker <- naturtyper_huleeiker %>%
+  mutate(areal = round(as.numeric(st_area(.)),3)) 
+
+## Øk arealet på små polygoner 
+
+naturtyper_huleeikerpb <- naturtyper_huleeiker %>%
+  st_centroid() %>%
+  filter(! areal > 706.5) %>%
+  st_buffer(dist=15) 
+
+
+```
+
+## Områder med hule eiker
+
+Lag større områder med hule eiker for å fange opp de som er i nærheten av hverandre slik at det er lettere å se
+
+```{r}
+
+# Velger her radius på 50 m for å løse opp
+
+huleikomr50 <- naturtyper_huleeiker %>%
+  st_buffer(dist=50) %>%
+  # Dissolve
+  summarise(geometry = st_union(.)) %>%
+  # Flere polygoner
+  st_cast("POLYGON") %>%
+  # Lag id
+  mutate(huleeik_omraade_id = row_number()) %>%
+  # Fyll hull inni polygoner
+  mutate(geometry = nngeo::st_remove_holes(geometry))
+
+naturtyper_huleeiker <- naturtyper_huleeiker %>%
+  filter(! identifikasjon_lokalId %in% naturtyper_huleeikerpb$identifikasjon_lokalId) %>%
+  rbind(naturtyper_huleeikerpb) %>%
+  mutate(arealbuff=round(as.numeric(st_area(.)),3)) 
+
+```
+
+## Regn ut diverse variabler
+
+```{r}
+
+naturtyper_huleeikero <-  huleikomr50 %>%
+  st_join(naturtyper_huleeiker) %>%
+  group_by(huleeik_omraade_id) %>%
+  # Gjør variablene numeriske
+  mutate(across(c(PRSP, X1AG.A.G, X1AG.B, PRSY, PRSH, PRRL.DD, PRRL.CR, PRRL.EN, PRRL.VU, PRRL.NT, X4TL.HL), as.numeric)) %>%
+  # Oppsummeringsverdier
+  summarise(
+    # Antall polygoner og areal
+    polygoner_antall = n(),
+    polygoner_arealsum = sum(arealbuff),
+    
+     # Antall polygoner som er restaurerbar
+    restaurerbar_antall = sum(restaurerbar == "ja", na.rm = TRUE),
+    
+    # Få med IDer, lokalitetsnavn, kommune, kartleggingsdato, verneområder, kartleggingsmetodikk
+    # fra det originale datasettet
+    identifikasjon_lokalId = toString(na.omit(unique(identifikasjon_lokalId))),
+    områdenavn = toString(na.omit(unique(områdenavn))),
+    kommunenavn = toString(na.omit(unique(kommunenavn))),
+    kartleggingsår = toString(unique(na.omit(substr(unique(kartleggingsdato),1,4)))),
+    forvaltningsavtale = toString(na.omit(unique(forvaltningsavtale))),
+    forvaltningsplan = toString(na.omit(unique(forvaltningsplan))),
+    #verneområde_navn = toString(na.omit(unique(verneområde_navn))),
+    #verneområde_type = toString(na.omit(unique(verneområde_type))),
+    kartleggingsmetodikk = toString(na.omit(unique(kartleggingsmetodikk))),
+    
+    # Div stat beskrivelsesvariabler
+    across(c(PRSP, X1AG.A.G, X1AG.B, PRSY, PRSH), ~ round(median(.x, na.rm = TRUE),1), .names = "{.col}_median"),
+    #across(c(PRSP, X1AG.A.G, PRSY, PRSH), ~ round(min(.x, na.rm = TRUE),1), .names = "{.col}_min"), 
+    #across(c(PRSP, X1AG.A.G, PRSY, PRSH), ~ round(max(.x, na.rm = TRUE),1), .names = "{.col}_maks"),
+    across(X4TL.HL, ~ round(sum(.x, na.rm = TRUE),1), .names = "{.col}_sum"),
+    across(c(PRRL.DD, PRRL.CR, PRRL.EN, PRRL.VU, PRRL.NT), ~ round(sum(.x, na.rm = TRUE),1), .names = "{.col}_sum")
+    ) %>%
+  # Noen verdier i forrige runde blir Inf når max kjøres
+  # Gjør disse til NA istedet
+  mutate(across(where(is.numeric), ~ ifelse(is.infinite(.), NA, .)))
+
+```
+
+## Konnektivitet mellom hule eiker
+
+```{r}
+
+#### Avstand til nærmeste eikeområde
+
+# Beregn avstander mellom hvert område
+distance_matrix <- st_distance(naturtyper_huleeikero)
+
+# Sett diagonal til Inf for å unngå distanse til seg selv
+diag(distance_matrix) <- Inf
+
+# Hent ut min avstand per område
+min_distance <- apply(distance_matrix, 1, min)
+
+# Legg til sf objektet
+naturtyper_huleeikero <- naturtyper_huleeikero %>%
+  mutate(min_avstand_huleikomr = ifelse(st_intersects(geometry, geometry, sparse = FALSE) %>% rowSums() > 1, 0, min_distance))
+
+
+```
+
+## Legg til indikatorarter
+
+```{r}
+
+# Filtrer artskartdata etter artslista
+indikatorarter <- artskartdata %>%
+  filter(validScientificName %in% c(anneST_artsliste$validScientificName, biller$Riktig.navnADB_05.2018))
+
+# Finn de som er innenfor hule eiker områdene
+indikatorarter_huleik <- indikatorarter %>%
+  st_intersection(naturtyper_huleeikero)
+
+naturtyper_huleeikero_arter <- naturtyper_huleeikero %>%
+  left_join(indikatorarter_huleik %>%
+              # Slå sammen norsk og vitenskapelig navn til senere
+              mutate(preferredPopularName2 = ifelse(preferredPopularName == "", NA,preferredPopularName), 
+                     art_navn = coalesce(preferredPopularName2, validScientificName)) %>%
+              #Fjern dupliserte arter
+              unique() %>%
+              group_by(huleeik_omraade_id) %>%
+              # Oppsummeringsverdier
+              summarise(
+                # Antall arter (ikke observasjoner)
+                indarter_n_obs = n(),
+                indarter_n_arter = n_distinct(art_navn),
+                indarter = toString(sprintf("%s: %s", names(table(art_navn)), table(art_navn)))
+              ) %>%
+              st_drop_geometry()
+  ) 
+
+# Lagre til senere, men da kun for de områdene som er restaurerbare
+huleeiker_indarter <- indikatorarter_huleik %>%
+  filter(restaurerbar_antall > 0) %>%
+  select(proxyId:qualityIssue)
+
+```
+
+## Legg til fremmedarter
+
+```{r}
+
+
+# Intersect
+FLarter_huleik <- fremmedarter %>%
+  st_intersection(naturtyper_huleeikero_arter)
+
+naturtyper_huleeikero_arter <- naturtyper_huleeikero_arter %>%
+  left_join(FLarter_huleik %>%
+              group_by(huleeik_omraade_id) %>%
+              # Oppsummeringsverdier
+              summarise(
+                # Antall polygoner og areal
+                fremmed_n_obs = n(),
+                fremmed_n_arter = n_distinct(preferredPopularName),
+                fremmed_arter = toString(sprintf("%s: %s", names(table(preferredPopularName)), table(preferredPopularName)))
+                )%>%
+              st_drop_geometry()
+  )
+
+# Lagre til senere, men da kun for de områdene som er restaurerbare
+huleeiker_fremmedarter <- FLarter_huleik %>%
+  filter(restaurerbar_antall > 0) %>%
+  select(proxyId:qualityIssue)
+
+```
+
+## Store og hule eiker med forbedringspotensial
+
+Filtrer ned datasettet til å kun inneholde de områdene som inneholder store og hule eiker med forbedringspotensial. Gjør det samme for enkelttrær-datasettet.
+
+Behold et eget datasett for enkelttrær i god tilstand.
+
+```{r}
+naturtyper_huleeikero_fp <- naturtyper_huleeikero_arter %>%
+  filter(restaurerbar_antall > 0)
+
+naturtyper_huleeiker_fp <- naturtyper_huleeiker %>%
+  filter(restaurerbar == "ja")
+naturtyper_huleeiker_god <- naturtyper_huleeiker %>%
+  filter(is.na(restaurerbar))
+```
+
+## Eksporter
+
+```{r}
+
+
+temp_file <- "~/Mounts/scratch/tmp_ida/gpkg/store_hule_eiker.gpkg" 
+final_file <- "/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Kriteriekart/store_hule_eiker.gpkg" 
+
+# Slett filene først hvis de eksisterer
+if (file.exists(temp_file)) file.remove(temp_file)
+if (file.exists(final_file)) file.remove(final_file)
+
+
+st_write(naturtyper_huleeikero_fp, temp_file, layer = "store_hule_eiker_omrader", append=F)
+st_write(naturtyper_huleeiker_fp, temp_file, layer = "store_hule_eiker_forbedringspotensial", append=F)
+st_write(naturtyper_huleeiker_god, temp_file, layer = "store_hule_eiker_god_tilstand", append=F)
+st_write(huleeiker_indarter, temp_file, layer = "store_hule_eiker_indarter", append=F)
+st_write(huleeiker_fremmedarter, temp_file, layer = "store_hule_eiker_fremmedarter", append=F)
+
+
+file.copy(temp_file, final_file, overwrite = TRUE)
+```
