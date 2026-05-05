@@ -3,10 +3,30 @@ title: "naturtiltak"
 format: html
 ---
 
+```{r, echo=FALSE, results='hide'}
+
+# Sett tegnkodingen for teksthåndtering til norsk bokmål med UTF-8-encoding
+Sys.setlocale("LC_CTYPE", "nb_NO.UTF-8")
+
+# Last inn pakker
+packages <- c("dplyr","sf", "mapview", "terra", "readr")
+sapply(packages, require, character.only = TRUE)
+```
+
+Datakildene som brukes:
+
+-   Akershus fylkesgrense
+
+-   Naturtiltak data fra Naturbase
+
+## Akershus fylkesgrense
+
 ```{r}
 akershus <- st_read("/data/R/GeoSpatialData/AdministrativeUnits/Norway_AdministrativeUnits/Original/Norway_County/versjon2024/Administrative_enheter_fylker_2024_FGDB-format/Basisdata_32_Akershus_25832_Fylker2024_FGDB.gdb", layer="fylke")
 
 ```
+
+## Naturtiltak data
 
 ```{r}
 punkt_url <- paste0(
@@ -47,21 +67,60 @@ polygon_url <- paste0(
 )
 
 polygon <- st_read(polygon_url, quiet = TRUE) %>%
-  st_transform(25832) %>%
+  st_transform(25833) %>%
   # Velg kun de innenfor Akershus
   st_filter(akershus, .predicate = st_within)
 
 
 ```
 
+## Restaurerte og restaurerbare grøfter og torvuttak
+
+```{r}
+
+demninger <- st_read("/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Data/Restaurerte arealer/Grofter/Akershus_Restaureringsdata_Myr/Demninger_Akershus.shp") %>%
+  st_transform(25832)
+
+grofter <- st_read("/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Data/Restaurerte arealer/Grofter/Akershus_Restaureringsdata_Myr/Grøfter_Akershus.shp")  %>%
+  st_zm(drop = TRUE, what = "ZM") %>%
+  # Noe feil med geometrien
+  st_make_valid() %>%
+  st_transform(25832) 
+
+restprosjekt <- st_read("/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Data/Restaurerte arealer/Grofter/Akershus_Restaureringsdata_Myr/Restaureringsprosjekt_Akershus.shp")  %>%
+  st_transform(25832)
+
+torvtak <- st_read("/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Data/Restaurerte arealer/Grofter/Akershus_Restaureringsdata_Myr/Torvtak_Akershus.shp")  %>%
+  st_zm(drop = TRUE, what = "ZM") %>%
+  # Noe feil med geometrien
+  st_make_valid() %>%
+  st_transform(25832) 
+
+
+```
+
+Må klippe mot Akershus.
+
+```{r}
+demninger_a <- demninger[st_intersects(demninger, akershus, sparse = FALSE)[, 1],]
+grofter_a <- grofter[st_intersects(grofter, akershus, sparse = FALSE)[, 1],]
+restprosjekt_a <- restprosjekt[st_intersects(restprosjekt, akershus, sparse = FALSE)[, 1],]
+torvtak_a <- torvtak[st_intersects(torvtak, akershus, sparse = FALSE)[, 1],]
+
+```
+
 ## Eksporter
 
 ```{r}
-temp_file <- "~/Mounts/scratch/tmp_ida/gpkg/naturtiltak.gpkg" 
-final_file <- "/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Tilleggsdata/naturtiltak.gpkg" 
+temp_file <- "~/Mounts/scratch/tmp_ida/gpkg/restaurerte_arealer.gpkg" 
+final_file <- "/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Tilleggsdata/restaurerte_arealer.gpkg" 
 st_write(polygon, temp_file, layer = "naturtiltak_polygoner", append=F)
 st_write(linje, temp_file, layer = "naturtiltak_linjer", append=F)
 st_write(punkt, temp_file, layer = "naturtiltak_punkter", append=F)
+st_write(demninger_a, temp_file, layer = "SF_myrrest_demninger", append=F)
+st_write(grofter_a, temp_file, layer = "SF_myrrest_grofter", append=F)
+st_write(restprosjekt_a, temp_file, layer = "SF_myrrest_prosjekter", append=F)
+st_write(torvtak_a, temp_file, layer = "SF_myrrest_torvtak", append=F)
 
 file.copy(temp_file, final_file, overwrite = TRUE)
 
