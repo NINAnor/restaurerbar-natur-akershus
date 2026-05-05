@@ -110,7 +110,7 @@ HB13_eldrebarskog <- st_read("/data/P-Prosjekter2/155014_restaurerbar_natur_aker
   filter(naturtype %in% c("F08","F18","F19"))
 
 # HB13 restaurerbar
-HB13_eldrebarskog_fp <- st_read("/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Kriteriekart/kartlagtenaturtyper_HB13.gpkg") %>%
+HB13_eldrebarskog_fp <- st_read("/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Data/Kartlagte naturtyper/HB13/HB13_forbedringspotensial.gpkg") %>%
   # Typer som er eldre barskog: F08=Gammel barskog, F18=Gammel granskog, F19=Gammel furuskog
   filter(naturtype %in% c("F08","F18","F19"))
 

@@ -9,7 +9,7 @@ format: html
 Sys.setlocale("LC_CTYPE", "nb_NO.UTF-8")
 
 # Last inn pakker
-packages <- c("dplyr","sf", "mapview", "terra")
+packages <- c("dplyr","sf", "mapview", "terra", "tidyr")
 sapply(packages, require, character.only = TRUE)
 
 ```
@@ -19,6 +19,12 @@ Grøfter i myr og skog er laget vha en KI-modell som tolker fjernmålte data (ik
 ## Last inn og klargjør data
 
 Datakildene som brukes:
+
+-   Grøfter fra KI-modell
+
+-   AR5
+
+-   Kartlagte naturtyper (MI og HB13)
 
 ### Grøfter
 
@@ -40,23 +46,133 @@ ar5skogmyr <- st_read(
   st_transform(25832)
 ```
 
-## Grøfter i myr og skog
+### Kartlagte naturtyper (MI og HB13)
+
+Henter inn kartlagte naturtyper etter MI og HB13.
+
+```{r}
+# HB13
+HB13 <- st_read("/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Data/Kartlagte naturtyper/HB13/HB13_faktaark.gpkg",
+                             layer="HB13_faktaark")
+
+# MI
+MI <- st_read("/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Data/Kartlagte naturtyper/Input_filer/Naturtyper_nin_32_akershus_25832_FILEGDB.gdb",
+                  layer="naturtyper_nin_omr")
+
+```
+
+## Grøfter i myr og skog ifølge KI-modell
 
 Hent ut de som overlapper med myr og skog.
 
 ```{r}
-
 i <- st_intersects(grofter, ar5skogmyr)
 grofter_myrskog <- grofter[lengths(i) > 0, ]
+
 ```
 
 Fjern de grøftene som er mindre enn 2 m2.
 
 ```{r}
-grofter_myrskog2 <- grofter_myrskog %>%
-  mutate(areal=as.numeric(st_area(geom))) %>%
-  filter(areal > 2) %>%
-  select(areal)
+grofter_myrskog <- grofter_myrskog %>%
+  mutate(areal = as.numeric(st_area(.))) %>%
+  filter(areal > 2) 
+```
+
+## Myr og skog med grøfter
+
+Henter ut de AR5-områdene med myr som har grøfter. Kunne også ha hentet ut skog med grøfter, men fordi det er så mange så unngår vi det.
+
+```{r}
+ar5myr <- ar5skogmyr %>% filter(arealtype == "60")
+
+# Finn de grøftene som kun er i myr
+i <- st_intersects(grofter, ar5myr)
+grofter_myr <- grofter[lengths(i) > 0, ]
+
+# Lag tabell med myr_id og groft_id
+myr_groft_kobling <- tibble(
+  groft_index = seq_along(i),
+  myr_index = i
+) %>%
+  unnest(myr_index) %>%
+  mutate(lokalid = ar5myr$lokalid[myr_index])
+
+# Beregn hele arealet til hver grøft
+groft_areal <- grofter %>%
+  mutate(
+    groft_index = row_number(),
+    groft_areal = st_area(.)
+  ) %>%
+  st_drop_geometry() %>%
+  select(groft_index, groft_areal)
+
+# Summer hele grøftearealet per myr
+groft_areal_per_myr <- myr_groft_kobling %>%
+  left_join(groft_areal, by = "groft_index") %>%
+  group_by(lokalid) %>%
+  summarise(grofter_areal = as.numeric(sum(groft_areal, na.rm = TRUE)))
+
+# Koble til ar5myr
+ar5myr_groft <- ar5myr %>%
+  left_join(groft_areal_per_myr, by = "lokalid") %>%
+  # Fjern de som ikke har grøfter
+  filter(!is.na(grofter_areal))%>%
+  select(lokalid, versjonid, arealtype, grofter_areal) 
+
+```
+
+## Grøfter i myr og skog ifølge kartlagte naturtyper
+
+Vi henter ut HB13 polygoner for våtmarkstyper hvor det nevnes grøft.
+
+```{r}
+HB13_grofter <- HB13 %>%
+  # Kun våtmarkstyper (A=ikke-tresatt våtmark, D02=Slåttemyr, F06=Rik sumpskog, kildeskog og strandskog, F14=Gammel sump- og kildeskog, F21=Flommarksskog)
+  filter(grepl("A|D02|F06|F14", naturtype)) %>%
+  mutate(
+    tekst_lc = str_to_lower(str_c(
+      raad_om_skjoetsel_og_hensyn, # paavirkning, innledning,
+      sep = " "
+    )),
+    restaurering_flagg = str_detect(
+      paste(tekst_lc),
+      paste0("grøft|torvuttak")) &
+      # Markerer de som helst ikke skal gjøres noe med som ikke restaurerbar for å prioritere de som burde restaureres
+      ! str_detect(
+        paste(tekst_lc),
+        paste0("ikke grøft|inngrep|unngå|ungå")
+      )
+  ) %>%
+  filter(restaurering_flagg) %>%
+  select(-c(restaurering_flagg, tekst_lc))
+
+
+```
+
+Vi henter ut polygoner etter MI hvor det er tilstandsvariabler for torvuttak (PRTO \> 0) og grøfteintensitet (7GR-GI \> 1).
+
+```{r}
+MI_grofter <- MI %>%
+  # Filtrer ut de radene hvor variablene nevnes
+  filter(grepl("PRTO|7GR-GI",ninBeskrivelsesvariable)) %>%
+  # Må første splitte opp kolonne for tilstandsvariabler for å hente ut de vi er interessert i
+  separate_rows(ninBeskrivelsesvariable, sep = ",") %>%
+  separate(ninBeskrivelsesvariable, into = c("name", "value"), sep = "_") %>%
+  pivot_wider(
+    names_from = name,
+    values_from = value,
+    values_fn = ~paste(., collapse = "; "),
+    values_fill = list(value = NA)
+  ) %>%
+  filter(
+  # Fjern de som har god tilstand
+    tilstand != "god",
+  # Finn de som har grøfter eller torvuttak
+    (PRTO > 0 & !is.na(PRTO)) | (`7GR-GI` > 1 & !is.na(`7GR-GI`))
+    )
+
+
 ```
 
 ## Eksporter
@@ -64,7 +180,12 @@ grofter_myrskog2 <- grofter_myrskog %>%
 ```{r}
 temp_file <- "~/Mounts/scratch/tmp_ida/gpkg/grofter_myrskog.gpkg" 
 final_file <- "/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Kriteriekart/grofter_myrskog.gpkg" 
+
+
 st_write(grofter_myrskog2, temp_file, layer = "grofter_myrskog", append=F)
+st_write(ar5myr_groft, temp_file, layer = "ar5myr_groft", append=F)
+st_write(HB13_grofter, temp_file, layer = "HB13_grofter", append=F)
+st_write(MI_grofter, temp_file, layer = "MI_grofter", append=F)
 
 file.copy(temp_file, final_file, overwrite = TRUE)
 ```
