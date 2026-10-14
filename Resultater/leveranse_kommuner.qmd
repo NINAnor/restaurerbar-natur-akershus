@@ -1,0 +1,402 @@
+---
+title: "leveranse_kommuner"
+format: html
+---
+
+```{r, echo=FALSE, results='hide'}
+
+# Sett tegnkodingen for teksthåndtering til norsk bokmål med UTF-8-encoding
+Sys.setlocale("LC_CTYPE", "nb_NO.UTF-8")
+
+# Last inn pakker
+packages <- c("dplyr","sf", "tibble", "purrr")
+sapply(packages, require, character.only = TRUE)
+
+```
+
+Klipper kriteriekartene mot kommunegrensene og lager leveransepakker per kommune. Hver kommune får to filgeodatabaser (.gdb) i sin mappe under Leveranser:
+
+-   restaurerbar_natur\_\<kommune\>.gdb: kriteriekartene med kartlagte naturtyper (HB13 og MI) med forbedringspotensial
+
+-   prioriteringskart\_\<kommune\>.gdb: lag som kan brukes til å prioritere, dvs. god tilstand, indikatorarter, prioriterte arter og fremmede arter
+
+Kantsoner mellom vei og natur, grå arealer ute av bruk og bekkeåpninger er ikke med i leveransene.
+
+## Last inn og klargjør data
+
+Datakildene som brukes:
+
+-   Kriteriekartene
+
+-   Kommunegrenser for Akershus
+
+### Mapper
+
+```{r}
+mappe_kriteriekart <- "/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Kriteriekart"
+mappe_leveranser <- "/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Leveranser"
+mappe_temp <- "~/Mounts/scratch/tmp_ida/gpkg/leveranser"
+
+dir.create(mappe_temp, showWarnings = FALSE, recursive = TRUE)
+```
+
+### Kommunegrenser
+
+Kommunene som skal ha leveranse er de som har en mappe under Leveranser.
+
+```{r}
+kommuner_leveranse <- list.dirs(mappe_leveranser, full.names = FALSE, recursive = FALSE)
+
+kommuner <- st_read("/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Data/Kommuner/akershus_kommuner_alle.gpkg") %>%
+  st_transform(25832) %>%
+  st_make_valid() %>%
+  filter(kommunenavn %in% kommuner_leveranse) %>%
+  select(kommunenummer, kommunenavn)
+
+# Sjekk at alle mappene har en kommune
+setdiff(kommuner_leveranse, kommuner$kommunenavn)
+```
+
+### Oversikt over lag
+
+Tabellen viser hvilke lag som skal være med, hva de skal hete og hvilken pakke de skal i. Lagnavn som er teknisk håndterbare (uten mellomrom og æøå) lages fra navnet, mens hele navnet legges inn som alias for laget i filgeodatabasen.
+
+```{r}
+K <- "kriteriekart"
+P <- "prioriteringskart"
+
+lagoversikt <- tribble(
+  ~fil,                                       ~lag,                                    ~navn,                                                                              ~pakke,
+  # Grøfter i myr og skog
+  "grofter_myrskog",                          "grofter_myrskog",                       "Grøfter i myr og skog",                                                            K,
+  "grofter_myrskog",                          "HB13_grofter",                          "Grøfter i myr og skog - naturtyper HB13",                                          K,
+  "grofter_myrskog",                          "MI_grofter",                            "Grøfter i myr og skog - naturtyper MI",                                            K,
+  "grofter_myrskog",                          "ar5myr_groft",                          "Grøfter i myr og skog - grøftet myr AR5",                                          K,
+  # Eldre barskog med forbedringspotensial
+  "eldrebarskog",                             "eldrebarskog",                          "Eldre barskog med forbedringspotensial",                                           K,
+  "eldrebarskog",                             "HB13_eldrebarskog_forbedringspotensial","Eldre barskog med forbedringspotensial - naturtyper HB13",                        K,
+  "eldrebarskog",                             "MI_eldrebarskog_forbedringspotensial",  "Eldre barskog med forbedringspotensial - naturtyper MI",                          K,
+  "eldrebarskog",                             "eldre_barskog_arter",                   "Eldre barskog med forbedringspotensial - indikatorarter",                          P,
+  "eldrebarskog",                             "HB13_eldrebarskog_god_tilstand",        "Eldre barskog med forbedringspotensial - naturtyper HB13 god tilstand",            P,
+  "eldrebarskog",                             "MI_eldrebarskog_god_tilstand",          "Eldre barskog med forbedringspotensial - naturtyper MI god tilstand",              P,
+  # Edelløvskog med forbedringspotensial
+  "edellauvskog",                             "edellauvskog",                          "Edelløvskog med forbedringspotensial",                                             K,
+  "edellauvskog",                             "HB13_edellauv_forbedringspotensial",    "Edelløvskog med forbedringspotensial - naturtyper HB13",                           K,
+  "edellauvskog",                             "MI_edellauv_forbedringspotensial",      "Edelløvskog med forbedringspotensial - naturtyper MI",                             K,
+  "edellauvskog",                             "edellauvskog_indarter",                 "Edelløvskog med forbedringspotensial - indikatorarter",                            P,
+  "edellauvskog",                             "edellauvskog_fremmedarter",             "Edelløvskog med forbedringspotensial - fremmede arter",                            P,
+  "edellauvskog",                             "HB13_edellauv_god_tilstand",            "Edelløvskog med forbedringspotensial - naturtyper HB13 god tilstand",              P,
+  "edellauvskog",                             "MI_edellauv_god_tilstand",              "Edelløvskog med forbedringspotensial - naturtyper MI god tilstand",                P,
+  # Osp i barskog
+  "osp_i_barskog",                            "osp_i_barskog",                         "Osp i barskog",                                                                    K,
+  "osp_i_barskog",                            "HB13_osp_barskog",                      "Osp i barskog - naturtyper HB13",                                                  K,
+  "osp_i_barskog",                            "MI_osp_barskog_forbedringspotensial",   "Osp i barskog - naturtyper MI",                                                    K,
+  "osp_i_barskog",                            "osp_indikatorarter_barskog",            "Osp i barskog - indikatorarter",                                                   P,
+  # Kantsoner
+  "vassdrag_kant_lavland_uten_vegetasjon_v4", "kantsoner_vassdrag",                    "Kantsoner uten vegetasjon langs vassdrag i lavlandet",                             K,
+  "kantsoner_langs_aker_v2",                  "kantsoner_langs_aker_v2",               "Kantsoner langs åker",                                                             K,
+  # Gårdsdammer og naturlige dammer
+  "gardsdammer",                              "gardsdammer",                           "Gårdsdammer og naturlige dammer - gårdsdammer",                                    K,
+  "naturlige_dammer",                         "naturlige_dammer",                      "Gårdsdammer og naturlige dammer - naturlige dammer",                               K,
+  # Åkerholmer med forbedringspotensial
+  "akerholmer",                               "akerholmer",                            "Åkerholmer med forbedringspotensial",                                              K,
+  "akerholmer",                               "hb13_akerholmer",                       "Åkerholmer med forbedringspotensial - naturtyper HB13",                            K,
+  "akerholmer",                               "prioritering_arter",                    "Åkerholmer med forbedringspotensial - prioriterte arter",                          P,
+  "akerholmer",                               "fremmed_arter",                         "Åkerholmer med forbedringspotensial - fremmede arter",                             P,
+  # Hule og store eiker i gjengroing
+  "store_hule_eiker",                         "store_hule_eiker_omrader",              "Hule og store eiker i gjengroing",                                                 K,
+  "store_hule_eiker",                         "store_hule_eiker_forbedringspotensial", "Hule og store eiker i gjengroing - forbedringspotensial",                         K,
+  "store_hule_eiker",                         "store_hule_eiker_god_tilstand",         "Hule og store eiker i gjengroing - god tilstand",                                  P,
+  "store_hule_eiker",                         "store_hule_eiker_indarter",             "Hule og store eiker i gjengroing - indikatorarter",                                P,
+  "store_hule_eiker",                         "store_hule_eiker_fremmedarter",         "Hule og store eiker i gjengroing - fremmede arter",                                P,
+  # Andre kartlagte naturtyper med forbedringspotensial
+  "kartlagte_naturtyper",                     "naturtyper_HB13",                       "Andre kartlagte naturtyper med forbedringspotensial - HB13",                       K,
+  "kartlagte_naturtyper",                     "naturtyper_MI",                         "Andre kartlagte naturtyper med forbedringspotensial - MI",                         K,
+  "kartlagte_naturtyper",                     "naturtyper_fremmedarter",               "Andre kartlagte naturtyper med forbedringspotensial - fremmede arter",             P
+)
+```
+
+Lag teknisk lagnavn fra navnet: æ blir ae, ø blir o, å blir a, og mellomrom og bindestrek blir understrek. HB13, MI og AR5 beholder store bokstaver.
+
+```{r}
+lag_teknisk_navn <- function(navn) {
+  navn %>%
+    tolower() %>%
+    gsub("æ", "ae", .) %>%
+    gsub("ø", "o", .) %>%
+    gsub("å", "a", .) %>%
+    gsub("[^a-z0-9]+", "_", .) %>%
+    gsub("^_|_$", "", .) %>%
+    gsub("hb13", "HB13", .) %>%
+    gsub("ar5", "AR5", .) %>%
+    gsub("(^|_)mi(_|$)", "\\1MI\\2", .)
+}
+
+lagoversikt <- lagoversikt %>%
+  mutate(lagnavn = lag_teknisk_navn(navn))
+
+# Sjekk at lagnavnene er unike
+any(duplicated(lagoversikt$lagnavn))
+
+lagoversikt %>% select(pakke, lagnavn, navn) %>% print(n = Inf)
+```
+
+### Les inn kriteriekartene
+
+Alle lag gjøres om til EPSG:25832 (eldre barskog ligger i 25833), og polygoner lagres som multipolygon slik at hvert lag har én geometritype.
+
+```{r}
+les_lag <- function(fil, lag) {
+  message("Leser: ", fil, " - ", lag)
+  x <- st_read(file.path(mappe_kriteriekart, paste0(fil, ".gpkg")), layer = lag, quiet = TRUE) %>%
+    st_zm() %>%
+    st_transform(25832)
+
+  if (all(st_geometry_type(x) %in% c("POLYGON", "MULTIPOLYGON"))) {
+    x <- x %>%
+      st_make_valid() %>%
+      hent_polygoner()
+  }
+  rydd_kolonner(x, lag)
+}
+```
+
+## Rydd kolonner
+
+Kolonnene ryddes etter hvilken type lag det er:
+
+-   Egne kriteriekart: alle kolonner fjernes, siden de kun er mellomregninger som ikke er til nytte for kommunene
+
+-   Kartlagte naturtyper etter HB13: doble kolonner fra Naturbase og faktaark slås sammen, ellers beholdes kolonnene
+
+-   Kartlagte naturtyper etter MI: beholdes som de er
+
+-   Artsobservasjoner (alle punktlag): beholder artsnavn, rødlistekategori, fremmedartskategori og noen få kolonner om observasjonen, med norske kolonnenavn. Rader uten artsnavn fjernes
+
+```{r}
+egne_lag <- c("grofter_myrskog", "ar5myr_groft", "eldrebarskog", "edellauvskog", "osp_i_barskog",
+              "kantsoner_vassdrag", "kantsoner_langs_aker_v2", "gardsdammer", "naturlige_dammer",
+              "akerholmer", "store_hule_eiker_omrader")
+```
+
+### HB13
+
+HB13-lagene har kolonner både fra Naturbase og fra faktaarkene, og flere av dem viser det samme. Der den ene kolonnen er kode og den andre tekst, beholdes teksten. Naturbase-navnene beholdes, bortsett fra områdenavn som følger det som er brukt i kartlagte_naturtyper.qmd.
+
+```{r}
+# Kode -> tekst, hentet fra rader der begge kolonnene har verdi
+hevdstatus_koder <- c("1" = "God hevd", "2" = "Svak hevd", "3" = "Ingen hevd",
+                      "4" = "Moderat-sterkt gjengrodd", "5" = "Dårlig hevd")
+noeyaktighet_koder <- c("1" = "> 100m", "2" = "50 - 100m", "3" = "20 - 50m", "4" = "<20 m")
+
+tom_til_na <- function(v) {
+  v <- as.character(v)
+  ifelse(is.na(v) | trimws(v) %in% c("", "NA"), NA_character_, v)
+}
+
+# Datoer kommer som tekst (20170628000000), millisekunder siden 1970 eller vanlig dato
+tolk_dato <- function(v) {
+  v <- tom_til_na(v)
+  ms <- suppressWarnings(as.numeric(v))
+  coalesce(
+    as.Date(ifelse(grepl("^[0-9]{14}$", v), substr(v, 1, 8), NA), format = "%Y%m%d"),
+    as.Date(as.POSIXct(ifelse(!is.na(ms) & ms > 1e11, ms / 1000, NA), origin = "1970-01-01", tz = "UTC")),
+    suppressWarnings(as.Date(ifelse(grepl("^[0-9]{4}-[0-9]{2}-[0-9]{2}", v), substr(v, 1, 10), NA)))
+  )
+}
+
+# Slå sammen beholdt og dobbel kolonne, og fjern den doble
+slaa_sammen <- function(x, behold, dobbel, f = tom_til_na, f_dobbel = f) {
+  if (!dobbel %in% names(x)) return(x)
+  verdi <- f_dobbel(x[[dobbel]])
+  if (behold %in% names(x)) verdi <- coalesce(f(x[[behold]]), verdi)
+  x[[behold]] <- verdi
+  x[[dobbel]] <- NULL
+  x
+}
+
+rydd_hb13 <- function(x) {
+  # Eikelagene har både HB13 og MI, og bruker områdenavn og kartleggingsdato
+  navn_kol <- if ("områdenavn" %in% names(x)) "områdenavn" else "omraadenavn"
+  dato_kol <- if ("kartleggingsdato" %in% names(x)) "kartleggingsdato" else "registreringsdato"
+
+  x %>%
+    slaa_sammen(navn_kol, "omraadenavn") %>%
+    slaa_sammen(navn_kol, "omradenavn") %>%
+    slaa_sammen("bmVerdi", "verdi") %>%
+    slaa_sammen("naturtypeUtforming", "utforming") %>%
+    slaa_sammen("bmUtvalgtNaturtype", "utvalgt_naturtype") %>%
+    slaa_sammen("bmHevdstatus", "hevdstatus", f_dobbel = function(v) unname(hevdstatus_koder[tom_til_na(v)])) %>%
+    slaa_sammen("nøyaktighetsklasse", "noeyaktighetsklasse", f_dobbel = function(v) unname(noeyaktighet_koder[tom_til_na(v)])) %>%
+    slaa_sammen(dato_kol, "registrerings_dato", f = tolk_dato) %>%
+    slaa_sammen("forvaltningsavtaleInngått", "forvaltningsavtale_inngaatt", f = tolk_dato) %>%
+    slaa_sammen("forvaltningsavtaleUtløper", "forvaltningsavtale_utloeper", f = tolk_dato)
+}
+```
+
+### Artsobservasjoner
+
+Kolonnen category fra Artskart inneholder både rødlistekategori og fremmedartskategori, så den splittes i to.
+
+```{r}
+fremmedartskategorier <- c("SE", "HI", "PH", "LO", "NK", "NR")
+
+# Datoer kommer både som "2021/08/18 22:00:00+00" (UTC) og "21.09.2017 00:00:00"
+artsobs_dato <- function(v) {
+  utc <- as.POSIXct(v, format = "%Y/%m/%d %H:%M:%S", tz = "UTC")
+  coalesce(as.Date(format(utc, tz = "Europe/Oslo")), as.Date(v, format = "%d.%m.%Y"))
+}
+
+rydd_arter <- function(x) {
+  x %>%
+    # Fremmedarter i kartlagte naturtyper har rader uten artsinformasjon
+    filter(!is.na(validScientificName)) %>%
+    mutate(
+      norsk_navn = tom_til_na(preferredPopularName),
+      rodlistekategori = ifelse(category %in% fremmedartskategorier, NA_character_, tom_til_na(category)),
+      fremmedartskategori = ifelse(category %in% fremmedartskategorier, category, NA_character_),
+      dato = artsobs_dato(dateTimeCollected),
+      antall = tom_til_na(individualCount)
+    ) %>%
+    select(
+      norsk_navn,
+      vitenskapelig_navn = validScientificName,
+      artsgruppe = taxonGroupName,
+      rodlistekategori,
+      fremmedartskategori,
+      dato,
+      antall,
+      lokalitet = locality,
+      habitat,
+      presisjon_m = coordinateUncertaintyInMeters,
+      kilde = institution,
+      datasett = datasetName
+    )
+}
+```
+
+```{r}
+rydd_kolonner <- function(x, lag) {
+  if (lag %in% egne_lag) return(x %>% select())
+  if (all(st_geometry_type(x) == "POINT")) return(rydd_arter(x))
+  rydd_hb13(x) %>% rens_feltnavn()
+}
+```
+
+### Feltnavn i filgeodatabase
+
+Filgeodatabaser tillater ikke punktum eller bindestrek i feltnavn, og objectid er reservert. NiN-kolonnene får derfor understrek i stedet for punktum, for eksempel X7GR.GI som blir X7GR_GI. HB13-kolonnen objectid får navnet objectid_naturbase.
+
+```{r}
+rens_feltnavn <- function(x) {
+  geom_kol <- attr(x, "sf_column")
+  nye <- names(x)
+  nye[nye != geom_kol] <- gsub("[.-]", "_", nye[nye != geom_kol])
+  nye[tolower(nye) == "objectid"] <- "objectid_naturbase"
+  names(x) <- nye
+  st_geometry(x) <- geom_kol
+  x
+}
+```
+
+## Klipp mot kommunegrenser
+
+Klipping kan gi geometrisamlinger (GeometryCollection) med linjer og punkter langs kommunegrensen. Henter ut kun polygondelene for hver rad, også fra samlinger inni samlinger, slik at hver rad beholdes som én rad.
+
+```{r}
+polygondeler <- function(g) {
+  if (inherits(g, "POLYGON")) return(list(unclass(g)))
+  if (inherits(g, "MULTIPOLYGON")) return(unclass(g))
+  if (inherits(g, "GEOMETRYCOLLECTION")) return(do.call(c, lapply(g, polygondeler)))
+  list()
+}
+
+hent_polygoner <- function(x) {
+  geom <- lapply(st_geometry(x), function(g) st_multipolygon(polygondeler(g)))
+  st_geometry(x) <- st_sfc(geom, crs = st_crs(x))
+  x[!st_is_empty(x), ]
+}
+```
+
+Punkter tas med hvis de ligger innenfor kommunen. Polygoner som ligger helt innenfor tas med som de er, mens polygoner som krysser grensen klippes. Egenskaper som areal og summer beholdes slik de var for hele polygonet.
+
+```{r}
+klipp_kommune <- function(x, kommune) {
+  kommune_geom <- st_geometry(kommune)
+
+  # Hent ut de som overlapper med kommunen
+  x <- x[lengths(st_intersects(x, kommune_geom)) > 0, ]
+  if (nrow(x) == 0 || all(st_geometry_type(x) == "POINT")) return(x)
+
+  # Klipp kun de som krysser grensen
+  innenfor <- lengths(st_within(x, kommune_geom)) > 0
+  if (all(innenfor)) return(x)
+
+  klippet <- suppressWarnings(st_intersection(x[!innenfor, ], kommune_geom))
+  klippet <- hent_polygoner(klippet)
+
+  rbind(x[innenfor, ], klippet[, names(x)])
+}
+```
+
+## Eksporter
+
+Leser ett og ett lag og skriver det til alle kommunene. Lag uten objekter i en kommune tas ikke med. Det skrives først til en midlertidig mappe og kopieres til Leveranser til slutt.
+
+```{r}
+filnavn <- function(pakke, kommune) {
+  file.path(mappe_temp, paste0(ifelse(pakke == K, "restaurerbar_natur_", "prioriteringskart_"), kommune, ".gdb"))
+}
+
+# Slett midlertidige filgeodatabaser først hvis de eksisterer (de er mapper)
+for (kommune in kommuner$kommunenavn) {
+  for (pakke in c(K, P)) {
+    unlink(filnavn(pakke, kommune), recursive = TRUE)
+  }
+}
+
+oppsummering <- list()
+
+for (i in seq_len(nrow(lagoversikt))) {
+  rad <- lagoversikt[i, ]
+  x <- les_lag(rad$fil, rad$lag)
+
+  for (kommune in kommuner$kommunenavn) {
+    x_kommune <- klipp_kommune(x, filter(kommuner, kommunenavn == kommune))
+    oppsummering[[length(oppsummering) + 1]] <- tibble(kommune = kommune, pakke = rad$pakke,
+                                                       lagnavn = rad$lagnavn, antall = nrow(x_kommune))
+    if (nrow(x_kommune) == 0) next
+
+    st_write(x_kommune, filnavn(rad$pakke, kommune), layer = rad$lagnavn, driver = "OpenFileGDB",
+             layer_options = paste0("LAYER_ALIAS=", rad$navn),
+             quiet = TRUE, append = FALSE)
+  }
+}
+
+oppsummering <- bind_rows(oppsummering)
+```
+
+Kopier til Leveranser. Eventuelle eldre geopackager med samme navn slettes.
+
+```{r}
+for (kommune in kommuner$kommunenavn) {
+  for (pakke in c(K, P)) {
+    temp_file <- filnavn(pakke, kommune)
+    final_file <- file.path(mappe_leveranser, kommune, basename(temp_file))
+
+    unlink(final_file, recursive = TRUE)
+    unlink(sub("\\.gdb$", ".gpkg", final_file))
+    if (dir.exists(temp_file)) file.copy(temp_file, dirname(final_file), recursive = TRUE)
+  }
+}
+```
+
+### Oppsummering
+
+Antall objekter per lag og kommune.
+
+```{r}
+oppsummering %>%
+  tidyr::pivot_wider(names_from = kommune, values_from = antall) %>%
+  print(n = Inf, width = Inf)
+```

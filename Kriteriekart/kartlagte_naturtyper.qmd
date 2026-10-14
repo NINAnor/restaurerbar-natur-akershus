@@ -1,0 +1,455 @@
+---
+title: "kartlagte_naturtyper"
+format: html
+---
+
+```{r, echo=FALSE, results='hide'}
+
+# Sett tegnkodingen for teksthåndtering til norsk bokmål med UTF-8-encoding
+Sys.setlocale("LC_CTYPE", "nb_NO.UTF-8")
+
+# Last inn pakker
+packages <- c("readxl","dplyr","readr","sf", "mapview", "terra", "stringr", "tidyr")
+sapply(packages, require, character.only = TRUE)
+```
+
+## Last inn og klargjør data
+
+Datakildene som brukes:
+
+-   HB13
+
+-   MI
+
+-   HB13 og MI polygoner som er inkludert i andre kriteriekart
+
+-   Utvalgte naturtyper
+
+-   KU-verdi naturtyper
+
+-   Artsobservasjoner av fremmedarter
+
+### DN HB 13
+
+HB13 dataene er en sammenstilling av data lastet ned fra Naturbase for Akershus og data samlet inn fra HB13-lokalitetenes faktaark. Dette er beskrevet nærmere i Kartgrunnlag/HB13.qmd.
+
+```{r}
+
+HB13 <- st_read("/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Data/Kartlagte naturtyper/HB13/HB13_faktaark.gpkg",
+                  layer="HB13_faktaark")
+
+
+```
+
+### MI
+
+```{r}
+MI <- st_read("/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Data/Kartlagte naturtyper/Input_filer/Naturtyper_nin_32_akershus_25832_FILEGDB.gdb",
+                  layer="naturtyper_nin_omr")
+```
+
+### Allerede brukte HB13 og MI polygoner
+
+```{r}
+mappe <- "/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Kriteriekart"
+
+# Finn alle gpkg-filer
+gpkg_filer <- list.files(mappe, pattern = "\\.gpkg$", full.names = TRUE)
+
+# Fjern kartlagte naturtyper hvis den allerede er eksportert. Hvis ikke vil alle polygoner fjernes senere
+gpkg_filer <- gpkg_filer[!grepl("kartlagte_naturtyper", gpkg_filer)]
+
+# Les relevante lag
+data_list <- lapply(gpkg_filer, function(fil) {
+  
+  # Finn lag i filen
+  layers <- st_layers(fil)$name
+  
+  # Velg lag med "MI"
+  mi_layers <- layers[grepl("MI|HB13|store_hule_eiker", layers) ]
+  
+  if (length(mi_layers) == 0) return(NULL)
+  
+  # Les lagene
+  lapply(mi_layers, function(lyr) {
+    message("Leser: ", basename(fil), " - ", lyr)
+    st_read(fil, layer = lyr, quiet = TRUE)
+  })
+})
+
+# Flatten liste (liste av lister → én liste)
+data_list <- unlist(data_list, recursive = FALSE)
+
+# Fjern NULL
+data_list <- Filter(Negate(is.null), data_list)
+
+# Hent ut ID-er (identifikasjon_lokalId)
+kn_id_fp <- unique(na.omit(unlist(lapply(data_list, \(x) x$identifikasjon_lokalId))))
+```
+
+### Utvalgte naturtyper
+
+```{r}
+path <- "/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Data/Kartlagte naturtyper/Utvalgte naturtyper/NaturtyperUtvalgte_32_akershus_25832_FILEGDB.gdb"
+
+st_layers(path)
+
+UN <- st_read(path, layer="NaturtyperUtvalgte_32_akershus")
+
+```
+
+### KU-verdi naturtyper
+
+```{r}
+path <- "/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Data/Kartlagte naturtyper/Naturtyper KU/Naturtyper_ku_verdi_32_akershus_25832_FILEGDB.gdb"
+
+st_layers(path)
+
+KU <- st_read(path, layer="Naturtyper_ku_verdi_32_akershus")
+```
+
+### HB13 naturtypenavn som matcher koder
+
+```{r}
+hb13_koder_naturtype <- read_excel("/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Data/Kartlagte naturtyper/HB13/HB13_koder.xlsx", sheet="Naturtype")
+
+hb13_koder_naturtypeUtf <- read_excel("/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Data/Kartlagte naturtyper/HB13/HB13_koder.xlsx", sheet="NaturtypeUtforming")
+```
+
+### Artsobservasjoner av fremmedarter
+
+```{r}
+fremmedarter <- read_csv("/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Data/Artsobservasjoner/Fremmedarter/artsobs_fremmed.csv") %>%
+   st_as_sf(coords = c("X_32", "Y_32"), crs = 25832) 
+```
+
+### Hogstflatekart
+
+```{r}
+
+# Trenger UTM 32
+hogst_satellitt <- rast("/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Data/Hogstflater/hogst_satellitt_32.tif")
+
+hogst_satellitte <- ifel(!is.na(hogst_satellitt), 1, NA)
+hogst_satellittv <- as.polygons(hogst_satellitte, dissolve = TRUE)
+```
+
+### Grått areal kart
+
+```{r}
+
+graatt_areal <- st_read("/data/R/GeoSpatialData/LandCover/Norway_Grå_Arealer_versjon1/Original/Kart over grå arealer GeoPackage-format/32_25835_graastruktur_gpkg.gpkg") %>%
+  st_transform(25832) %>%
+  vect()
+
+```
+
+## Prosesser DN HB13 data
+
+Ønsker å finne de som er i dårlig tilstand. Gjør det ved å først filtrere de som har informasjon i kolonnene paavirkning, fremmede_arter og raad_om_skjoetsel_og_hensyn.
+
+Denne filen brukes så i andre kartlag.
+
+```{r}
+HB13_fp <- HB13 %>%
+  filter(
+    if_all(
+      c(paavirkning, fremmede_arter, raad_om_skjoetsel_og_hensyn),
+      ~ !is.na(.) | trimws(.) != ""
+    ),
+    # Hvis paavirkning og raad_om_skjoetsel_og_hensyn er tomme og det står "Ingen" i fremmede_arter, fjern disse også
+    !(grepl("ingen", fremmede_arter, ignore.case = TRUE) &
+      (is.na(paavirkning) | trimws(paavirkning) == "") &
+      (is.na(raad_om_skjoetsel_og_hensyn) | trimws(raad_om_skjoetsel_og_hensyn) == ""))
+  ) %>%
+  mutate(
+    tekst_lc = str_to_lower(raad_om_skjoetsel_og_hensyn),
+    restaurering_flagg = str_detect(
+      tekst_lc,
+      paste(
+        c(
+          "fjerne|fjernes|fjerning",
+          "rydde|rydding|ryddes",
+          "bekjempe|bekjempes|bekjempelse",
+          "fremmedart|fremmede arter|svartelisteart",
+          "gjengro|unngå gjengroing|hindre gjengroing",
+          "kratt",
+          "busk|busker",
+          "oppslag|treoppslag",
+          "ta ut gran|uttak av gran|gran tas ut|hogg.*gran",
+          "fristill|fristilles",
+          "restaurer|restaurering",
+          "\\bslått\\b|\\bslås\\b|\\bslå\\b",
+          "gjeninnføre beite|bør beites|skjøttes med beite|beiting bør gjenopptas|beitedyr gjeninnføres"
+        ),
+        collapse = "|"
+      )
+    ),
+    ikke_tiltak = str_detect(
+      tekst_lc,
+      "ikke behov for skjøtsel|skjøtselstiltak ikke nødvendig|ingen skjøtselstiltak nødvendig|ligge i fred|ikke behov for|ingen tiltak|unngå beskjæring|unødvendig* beskjæring"
+    )
+  ) %>%
+  filter(restaurering_flagg & !ikke_tiltak) %>%
+  rowwise() %>%
+  mutate(
+    tiltakstype = list(c(
+      "fremmede arter"[str_detect(tekst_lc, "fremmedart|fremmede|uønsket|svartelisteart|bekjempe")],
+      "rydding / hindre gjengroing"[str_detect(tekst_lc, "gjengro|kratt|busk|oppslag|rydde|rydding")],
+      "uttak av trær / fristilling"[str_detect(tekst_lc, "ta ut gran|uttak av gran|hogg.*gran|fristill")],
+      "slått"[str_detect(tekst_lc, "\\bslått\\b|\\bslås\\b|\\bslå\\b|\\bslåtter\\b")],
+      "beite"[str_detect(tekst_lc, "beite")],
+      "restaurering generelt"[str_detect(tekst_lc, "restaurer|restaurering")],
+      "fjerne søppel"[str_detect(tekst_lc, "søppel")],
+      "generell fjerning"[str_detect(tekst_lc, "fjerne|fjerning")]
+    ))
+  ) %>%
+  mutate(tiltakstype = paste(na.omit(unlist(tiltakstype)), collapse = ", ")) %>%
+  ungroup() %>%
+  #Fjern kolonner som ikke trengs
+  select(-c("tekst_lc", "restaurering_flagg", "ikke_tiltak"))
+
+```
+
+### Eksporter midlertidig fil
+
+```{r}
+temp_file <- "~/Mounts/scratch/tmp_ida/gpkg/kartlagtenaturtyper_HB13.gpkg" 
+final_file <- "/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Data/Kartlagte naturtyper/HB13/HB13_forbedringspotensial.gpkg" 
+st_write(HB13_fp, temp_file, layer = "kartlagtenaturtyper_HB13", append=F)
+file.copy(temp_file, final_file, overwrite = TRUE)
+```
+
+### Fjern områder som overlapper med hogstflater og grå arealer
+
+Fjern de som er i andre kriteriekart. HB13-dammer holdes også utenfor.
+
+```{r}
+HB13_fp1 <- HB13_fp %>%
+  filter(! identifikasjon_lokalId %in% kn_id_fp,
+         # Dammer (E09) holdes utenfor, de hører til kriteriekartet for dammer
+         naturtype != "E09")
+```
+
+```{r}
+
+
+# Klipp alle lagene mot grått areal og hogst
+HB13_fp2 <- erase(vect(HB13_fp1), hogst_satellittv)
+HB13_fp2 <- erase(HB13_fp2, graatt_areal)
+
+HB13_fp2 <- st_as_sf(HB13_fp2)
+
+# Finn areal av HB13 polygoner før og etter
+HB13_fp <- HB13_fp %>%
+  mutate(areal_for=as.numeric(st_area(.)))
+HB13_fp2 <- HB13_fp2 %>%
+  mutate(areal_etter=as.numeric(st_area(.))) %>%
+  left_join(HB13_fp %>%
+              st_drop_geometry() %>%
+              select(identifikasjon_lokalId, areal_for))
+  
+# Fjern områder som kun har 20 % av det originale arealet eller mindre etter overlapp med grått areal og hogstflater OG arealet er mindre enn 1000 m2
+HB13_fp3 <- HB13_fp2 %>%
+  st_as_sf() %>%
+  mutate(areal_igjen = areal_etter/areal_for) %>%
+  filter(areal_igjen >= 0.2 & areal_etter > 1000)
+```
+
+### Legg til informasjon
+
+```{r}
+HB13_fp4 <- HB13_fp3 %>%
+  # Legg til KU-verdi
+  left_join(KU %>%
+              st_drop_geometry() %>%
+              select(faktaark=faktaark_lokalitet, # Må endre navnet på denne
+                     verdikategori)) %>% # Faktaark er det samme som i det andre datasettet
+  # Legg til om utvalgt naturtype
+  left_join(UN %>%
+              # ID er lik utenom at det står UN- før
+              mutate(identifikasjon_lokalId = str_remove(identifikasjon_lokalId, "UN-")) %>%
+              st_drop_geometry() %>%
+              select(identifikasjon_lokalId,
+                     utvalgtNaturtype,
+                     utvalgtNaturtype_navn = utvalgtNaturtypeTekst)) %>% 
+  # Legg til navn på naturtype og utforming
+  left_join(hb13_koder_naturtype %>%
+              select(naturtype=Kode,
+                     naturtype_navn=Navn)) %>%
+  left_join(hb13_koder_naturtypeUtf %>%
+              select(naturtypeUtforming=Kode,
+                     naturtypeUtforming_navn=Navn)) #%>%
+
+# Legg til fremmedarter
+
+# Intersect
+HB13_fp_fa <- fremmedarter %>%
+  st_intersection(HB13_fp4)
+
+HB13_fp4 <- HB13_fp4 %>%
+  left_join(HB13_fp_fa %>%
+              group_by(identifikasjon_lokalId) %>%
+              # Oppsummeringsverdier
+              summarise(
+                # Antall polygoner og areal
+                fremmed_n_obs = n(),
+                fremmed_n_arter = n_distinct(preferredPopularName),
+                fremmed_arter = toString(sprintf("%s: %s", names(table(preferredPopularName)), table(preferredPopularName)))
+                )%>%
+              st_drop_geometry()
+  )
+  
+HB13_fp4 <- HB13_fp4 %>%
+  # Fjerner kolonner som ikke er informastive eller viser det samme, men har forskjellige navn
+  select(where(~ !all(is.na(.))),
+         -c(identifikasjon_navnerom, bmUtvalgtNaturtype, utvalgt_naturtype, registrerings_dato, utforming, omradenavn, verdi)) %>%
+  # Legg viktige kolonner tidligere datasettet
+  relocate(c(omraadenavn,naturtype,naturtype_navn, naturtypeUtforming, naturtypeUtforming_navn,utvalgtNaturtype,utvalgtNaturtype_navn, verdikategori,bmVerdi, fremmed_n_obs, fremmed_n_arter, fremmed_arter),
+           .after="registreringsdato")
+
+```
+
+## Prosesser MI-data
+
+Vil her filtrere slik at vi kun inkluderer de polygonene som ikke har god tilstand. I tillegg splitter vi opp NiN-beskrivelsesvariabel-kolonnen slik at alle variablene har egne kolonner.
+
+```{r}
+MI_fp <- MI %>%
+  filter(! tilstand == "god") %>%
+  separate_rows(ninBeskrivelsesvariable, sep = ",") %>%
+  # Kun behold de som inneholder "_" ettersom det er noen skrivefeil inni der
+  filter(str_detect(ninBeskrivelsesvariable, "_")) %>% 
+  separate(ninBeskrivelsesvariable, into = c("name", "value"), sep = "_", fill = "right") %>%
+  pivot_wider(
+    names_from = name,
+    values_from = value,
+    values_fn = ~paste(., collapse = "; "),
+    values_fill = list(value = NA)
+  ) 
+
+# Sorter kolonne-rekkefølge
+cols <- names(MI_fp)
+
+start <- match("7JB-GJ", cols)
+end   <- match("1AR-C-L", cols)
+
+MI_fp <- MI_fp %>%
+  select(
+    all_of(cols[1:(start - 1)]),
+    all_of(sort(cols[start:end]))
+  )
+
+```
+
+### Fjern områder som overlapper med hogstflater og grå arealer
+
+Fjern de som er i andre kriteriekart.
+
+```{r}
+MI_fp1 <- MI_fp %>%
+  filter(! identifikasjon_lokalId %in% kn_id_fp)
+```
+
+```{r}
+
+# Klipp alle lagene mot grått areal og hogst
+MI_fp2 <- erase(vect(MI_fp1), hogst_satellittv)
+
+MI_fp2 <- erase(MI_fp2, graatt_areal)
+
+MI_fp2 <- st_as_sf(MI_fp2)
+
+# Finn areal av MI polygoner før og etter
+MI_fp <- MI_fp %>%
+  mutate(areal_for=as.numeric(st_area(.)))
+MI_fp2 <- MI_fp2 %>%
+  mutate(areal_etter=as.numeric(st_area(.))) %>%
+  left_join(MI_fp %>%
+              st_drop_geometry() %>%
+              select(identifikasjon_lokalId, areal_for))
+  
+# Fjern områder som kun har 20 % av det originale arealet eller mindre etter overlapp med grått areal og hogstflater OG arealet er mindre enn 1000 m2
+MI_fp3 <- MI_fp2 %>%
+  st_as_sf() %>%
+  mutate(areal_igjen = areal_etter/areal_for) %>%
+  filter(areal_igjen >= 0.2 & areal_etter > 1000)
+```
+
+### Legg til informasjon om utvalgte naturtyper og KU-verdi
+
+```{r}
+
+MI_fp4 <- MI_fp3 %>%
+  # Legg til KU-verdi
+  left_join(KU %>%
+              st_drop_geometry() %>%
+              select(faktaark=faktaark_lokalitet, # Må endre navnet på denne
+                     verdikategori)) %>% # Faktaark er det samme som i det andre datasettet
+  # Legg til om utvalgt naturtype
+  left_join(UN %>%
+              st_drop_geometry() %>%
+              # ID er lik utenom at det står UN- før
+              mutate(identifikasjon_lokalId = str_remove(identifikasjon_lokalId, "UN-")) %>%
+              select(identifikasjon_lokalId,
+                     utvalgtNaturtype,
+                     utvalgtNaturtype_navn = utvalgtNaturtypeTekst))
+
+
+# Legg til fremmedarter
+
+# Intersect
+MI_fp_fa <- fremmedarter %>%
+  st_intersection(MI_fp4)
+
+MI_fp4 <- MI_fp4 %>%
+  left_join(MI_fp_fa %>%
+              group_by(identifikasjon_lokalId) %>%
+              # Oppsummeringsverdier
+              summarise(
+                # Antall polygoner og areal
+                fremmed_n_obs = n(),
+                fremmed_n_arter = n_distinct(preferredPopularName),
+                fremmed_arter = toString(sprintf("%s: %s", names(table(preferredPopularName)), table(preferredPopularName)))
+                )%>%
+              st_drop_geometry()
+  )
+
+MI_fp4 <- MI_fp4 %>%
+  # Fjerner kolonner som ikke er informastive eller viser det samme, men har forskjellige navn
+  select(where(~ !all(is.na(.))),
+         -c(identifikasjon_navnerom, objekttype, )) %>%
+  # Legg viktige kolonner tidligere datasettet
+  relocate(c(hovedøkosystem, naturtype, verdikategori, lokalitetskvalitet,  tilstand, tilstandBeskrivelse, naturmangfold, naturmangfoldBeskrivelse,fremmed_n_obs, fremmed_n_arter, fremmed_arter),
+           .after="kommuner")
+```
+
+## Klargjør fremmedarter for eksport
+
+Noen observasjoner vil antagelig både overlappe med MI og HB13 fordi disse overlapper med hverandre, så vi vil kun ha unike observasjoner. Velger derfor kun kolonnene fra artsobservasjonene, ikke kolonnene fra naturtypene.
+
+```{r}
+naturtyper_fp_fa <- bind_rows(MI_fp_fa %>% select(all_of(names(fremmedarter))),
+                              HB13_fp_fa %>% select(all_of(names(fremmedarter)))) %>%
+  distinct()
+
+```
+
+## Eksporter
+
+```{r}
+
+temp_file <- "~/Mounts/scratch/tmp_ida/gpkg/kartlagte_naturtyper.gpkg" 
+final_file <- "/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Kriteriekart/kartlagte_naturtyper.gpkg" 
+
+# Slett filene først hvis de eksisterer
+if (file.exists(temp_file)) file.remove(temp_file)
+if (file.exists(final_file)) file.remove(final_file)
+
+
+st_write(HB13_fp4, temp_file, layer = "naturtyper_HB13", append=F)
+st_write(MI_fp4, temp_file, layer = "naturtyper_MI", append=F)
+st_write(naturtyper_fp_fa, temp_file, layer = "naturtyper_fremmedarter", append=F)
+
+file.copy(temp_file, final_file, overwrite = TRUE)
+```

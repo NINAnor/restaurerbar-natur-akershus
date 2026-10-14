@@ -1,0 +1,222 @@
+---
+title: "validering_skog"
+format: html
+---
+
+```{r, echo=FALSE, results='hide'}
+
+# Sett tegnkodingen for teksthåndtering til norsk bokmål med UTF-8-encoding
+Sys.setlocale("LC_CTYPE", "nb_NO.UTF-8")
+
+# Last inn pakker
+packages <- c("readxl", "dplyr","sf", "mapview", "terra", "lwgeom", "purrr", "broom", "tidyr", "ggplot2", "NinaR")
+sapply(packages, require, character.only = TRUE)
+
+```
+
+Skal her gjøre en vurdering om valideringspunktene treffer spesifikke klasser av eldre barskog og edellauvskog for å se etter forbedringer til senere.
+
+## Last inn data
+
+### Valideringspunkter
+
+```{r}
+valideringsdata <- st_read("/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Data/Validering/2026/restaurerbarnatur_validering_25_26.gpkg")
+```
+
+### Eldre barskog
+
+```{r}
+eldrebarskog <- st_read("/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Kriteriekart/eldrebarskog.gpkg", layer= "eldrebarskog") 
+
+```
+
+### Edellauvskog
+
+```{r}
+edellauvskog <- st_read("/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Kriteriekart/edellauvskog.gpkg", layer= "edellauvskog") 
+
+```
+
+## Vurder eldre barskog
+
+```{r}
+eldrebarskog_punkter <- valideringsdata %>%
+  filter(kriteriekart == "Mature coniferous forest")%>%
+  st_transform(25833)
+
+
+# Hent ut infomrasjon fra eldrebarskogs-kartet for hvert punkt
+eldrebarskog_punktere <- st_join(eldrebarskog_punkter, eldrebarskog, join = st_within)
+
+
+ggplot(eldrebarskog_punktere, aes(x = restaurerbart_validering, y = naturskogsnaerhet_andel)) +
+  geom_boxplot(outlier.shape = NA, fill = "grey85", alpha = 0.6) +
+  geom_jitter(width = 0.15, alpha = 0.5, size = 1.5, color = "darkgreen") +
+  labs(
+    x = "Restaurerbart (validering)",
+    y = "Andel naturskognærhet",
+    title = "Naturskognærhet etter valideringskategori"
+  ) +
+  theme_minimal()
+
+ggplot(eldrebarskog_punktere, aes(x = restaurerbart_validering, y = naturskogsnaerhet_sum)) +
+  geom_boxplot(outlier.shape = NA, fill = "grey85", alpha = 0.6) +
+  geom_jitter(width = 0.15, alpha = 0.5, size = 1.5, color = "darkgreen") +
+  labs(
+    x = "Restaurerbart (validering)",
+    y = "Mengden naturskogsnærhets-celler (kat 3-5)",
+    title = "Naturskognærhet etter valideringskategori"
+  ) +
+  theme_minimal()
+
+```
+
+Andel naturskogsnærhet i en polygon har ingenting å si, men antallet celler med naturskogsnærhet har noe å si hvor flere celler øker sannsynligheten for at et område er restaurerbart.
+
+```{r}
+eldrebarskog
+
+ggplot(eldrebarskog, aes(x = naturskogsnaerhet_sum, y = naturskogsnaerhet_andel)) +
+  geom_point() +
+  geom_smooth() +
+  labs(
+    y = "Andel naturskognærhet",
+    x = "Mengden naturskogsnærhets-celler (kat 3-5)"  ) +
+  theme_minimal()
+```
+
+Ikke et tydelig forhold mellom andel og antall.
+
+Undersøker så om selve naturskogsnærhetsklassen har noe å si.
+
+```{r}
+naturskogsnaerhet <- rast("/data/R/GeoSpatialData/LandCover/Norway_Naturskog/Original/naturskog_v1_naturskognaerhet.tif")
+
+eldrebarskog_punkterv <- vect(eldrebarskog_punktere)
+
+eldrebarskog_punkterr <- terra::extract(naturskogsnaerhet, eldrebarskog_punkterv)
+eldrebarskog_punkterv$naturskog_kat <- eldrebarskog_punkterr[, 2]  # skip the ID column
+
+eldrebarskog_punkterer <- st_as_sf(eldrebarskog_punkterv)
+
+ggplot(eldrebarskog_punkterer, aes(x = restaurerbart_validering, y = naturskog_kat)) +
+  geom_boxplot(outlier.shape = NA, fill = "grey85", alpha = 0.6) +
+    geom_jitter(width = 0.15, height = 0, alpha = 0.5, size = 1.5, color = "darkgreen") +
+  labs(
+    x = "Restaurerbart (validering)",
+    y = "Naturskogsnærhetskategori",
+    title = "Naturskognærhet etter valideringskategori"
+  ) +
+  theme_minimal()
+```
+
+Selve kategorien har ingenting å si.
+
+Mulig at det er område rundt som har noe å si? Lager en buffer rundt valideringspunktet på 10 m for å fange opp et større område, og ta gjennomsnitt innad området.
+
+```{r}
+# Funksjon for å kjøre hele workflowen for en gitt buffer-avstand
+kjor_analyse <- function(dist_verdi) {
+  
+  punkter_buffer <- st_buffer(eldrebarskog_punktere, dist = dist_verdi)
+  punkter_v <- vect(punkter_buffer)
+  
+  punkter_r <- terra::extract(naturskogsnaerhet, punkter_v, fun = mean, na.rm = TRUE)
+  punkter_v$naturskog_kat <- punkter_r[, 2]  # skip ID-kolonnen
+  
+  punkter_sf <- st_as_sf(punkter_v)
+  
+  p <- ggplot(punkter_sf, aes(x = restaurerbart_validering, y = naturskog_kat)) +
+    geom_boxplot(outlier.shape = NA, fill = "grey85", alpha = 0.6) +
+    geom_jitter(width = 0.15, height = 0, alpha = 0.5, size = 1.5, color = "darkgreen") +
+    labs(
+      x = "Restaurerbart (validering)",
+      y = "Naturskogsnærhetskategori",
+      title = paste0("Naturskognærhet etter valideringskategori (buffer = ", dist_verdi, " m)")
+    ) +
+    theme_minimal()
+  
+  list(data = punkter_sf, plot = p)
+}
+
+res_10 <- kjor_analyse(10)
+res_20 <- kjor_analyse(20)
+
+res_10$plot
+res_20$plot
+```
+
+```{r}
+ggplot(eldrebarskog_punkterer, aes(x = restaurerbart_validering, y = naturskogsnaerhet_sum)) +
+  geom_boxplot(outlier.shape = NA, fill = "grey85", alpha = 0.6) +
+  geom_jitter(aes(col = naturskog_kat), width = 0.15, alpha = 0.7, size = 1.5) +
+  scale_color_viridis_c(name = "Naturskog-\nkategori") +
+  labs(
+    x = "Restaurerbart (validering)",
+    y = "Mengden naturskogsnærhets-celler (kat 3-5)",
+    title = "Naturskognærhet etter valideringskategori"
+  ) +
+  theme_minimal()
+```
+
+```{r}
+eldrebarskog_test <- eldrebarskog_punkterer %>%
+  st_drop_geometry() %>%
+  filter(!is.na(restaurerbart_validering), restaurerbart_validering != "NA") %>%
+  droplevels()  # drop unused factor levels so tests don't complain
+
+kruskal.test(naturskogsnaerhet_sum ~ restaurerbart_validering, data = eldrebarskog_test)
+
+pairwise.wilcox.test(
+  eldrebarskog_test$naturskogsnaerhet_sum,
+  eldrebarskog_test$restaurerbart_validering,
+  p.adjust.method = "BH"
+)
+
+
+# Kategori
+
+kruskal.test(naturskog_kat ~ restaurerbart_validering, data = eldrebarskog_test)
+
+pairwise.wilcox.test(
+  eldrebarskog_test$naturskog_kat,
+  eldrebarskog_test$restaurerbart_validering,
+  p.adjust.method = "BH"
+)
+```
+
+Tester også med å slå ja og tja sammen (=TP)
+
+```{r}
+
+eldrebarskog_test2 <- eldrebarskog_test %>%
+  mutate(TP = as.character(TP))
+
+kruskal.test(naturskogsnaerhet_sum ~ TP, data = eldrebarskog_test2)
+
+kruskal.test(naturskog_kat ~ TP, data = eldrebarskog_test2)
+
+```
+
+## Edellauvskog
+
+```{r}
+edellauvskog_punkter <- valideringsdata %>%
+  filter(kriteriekart == "Broadleaved deciduous forest")
+
+# Hent ut infomrasjon fra edellauvskog-kartet for hvert punkt
+edellauvskog_punktere <- st_join(edellauvskog_punkter, edellauvskog, join = st_within)
+
+
+ggplot(edellauvskog_punktere, aes(x = restaurerbart_validering, y = log(fremmed_n_arter))) +
+  geom_boxplot(outlier.shape = NA, fill = "grey85", alpha = 0.6) +
+  #geom_jitter(aes(col = naturskog_kat), width = 0.15, alpha = 0.7, size = 1.5) +
+  scale_color_viridis_c(name = "Naturskog-\nkategori") +
+  labs(
+    x = "Restaurerbart (validering)",
+    y = "Mengden naturskogsnærhets-celler (kat 3-5)",
+    title = "Naturskognærhet etter valideringskategori"
+  ) +
+  theme_minimal()
+```

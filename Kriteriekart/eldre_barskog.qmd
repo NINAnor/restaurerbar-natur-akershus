@@ -1,0 +1,223 @@
+---
+title: "Eldre barskog med forbedringspotensial"
+format: html
+---
+
+```{r, echo=FALSE, results='hide'}
+
+# Sett tegnkodingen for teksthåndtering til norsk bokmål med UTF-8-encoding
+Sys.setlocale("LC_CTYPE", "nb_NO.UTF-8")
+
+# Last inn pakker
+packages <- c("dplyr","sf", "mapview", "terra", "readr")
+sapply(packages, require, character.only = TRUE)
+
+```
+
+## Last inn og klargjør data
+
+Datakildene som brukes:
+
+-   Akershus fylkesgrense
+
+-   SR16 V
+
+-   Naturskogsnærhet
+
+-   Hogstflatekart
+
+-   Grått areal kart
+
+-   Kartlagte naturtyper (MI og HB13)
+
+-   Artsobservasjoner
+
+```{r}
+akershus <- st_read("/data/R/GeoSpatialData/AdministrativeUnits/Norway_AdministrativeUnits/Original/Norway_County/versjon2024/Administrative_enheter_fylker_2024_FGDB-format/Basisdata_32_Akershus_25832_Fylker2024_FGDB.gdb", layer="fylke")
+
+# Mange kart er for hele Norge, og vi trenger kun å prosessere data for Akershus.
+# Naturskogsnærhet og hogstflater er i UTM 33, så alle lag prosesseres i UTM 33 og transformeres til UTM 32 før eksport
+askershusbbox <- st_bbox(akershus) %>%
+  st_as_sfc() %>%
+  st_transform(25833) %>%
+  vect()
+
+```
+
+### Kart over barskog
+
+```{r}
+barskog <- st_read(
+  "/data/R/GeoSpatialData/LandCover/Norway_ForestResources_SR16_NIBIO/Original/versjon2025/32_25832_SR16_GDB/32_25832_SR16_GDB.gdb",
+  # Filtrer for å kun få ut barskog (1=grandominert, 2=furudominert, 3=barblanding)
+  query = "SELECT * FROM SkogressursFlate WHERE srtreslagsam IN (1,2,3)"
+) %>%
+  st_transform(25833) %>%
+  vect()
+```
+
+### Kart over naturskogsnærhet klasse 3 - 5
+
+```{r}
+naturskogsnaerhet <- rast("/data/R/GeoSpatialData/LandCover/Norway_Naturskog/Original/naturskog_v1_naturskognaerhet.tif")
+
+naturskogsnaerhet <- crop(naturskogsnaerhet,askershusbbox)
+
+# Sett alle verdier som ikke er mellom 3 og 5 til NA
+naturskogsnaerhet[naturskogsnaerhet < 3 | naturskogsnaerhet > 5] <- NA
+# Sett alle andre verdier til 1
+naturskogsnaerhet[!is.na(naturskogsnaerhet)]  <- 1
+
+# Transformer til riktig koordinatsystem
+#naturskogsnaerhet <- project(naturskogsnaerhet, "epsg:25833")
+```
+
+### Hogstflatekart
+
+```{r}
+
+hogst_satellitt <- rast("/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Data/Hogstflater/hogst_satellitt_33.tif")
+
+```
+
+### Grått areal kart
+
+```{r}
+
+graatt_areal <- st_read("/data/R/GeoSpatialData/LandCover/Norway_Grå_Arealer_versjon1/Original/Kart over grå arealer GeoPackage-format/32_25835_graastruktur_gpkg.gpkg") %>%
+  # Samme koordinatsystem som naturskogsnærhet, hogstflater og barskog (UTM 33)
+  st_transform(25833) %>%
+  vect()
+
+```
+
+### Observasjoner av indikatorarter for eldre barskog
+
+```{r}
+barskog_arter <- read_csv("/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Data/Artsobservasjoner/Indikatorarter/artsobs_barskog.csv") %>%
+   st_as_sf(coords = c("X_32", "Y_32"), crs = 25832)
+```
+
+### Kartlagte naturtyper (MI og HB13)
+
+```{r}
+# HB13
+HB13_eldrebarskog <- st_read("/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Data/Kartlagte naturtyper/HB13/HB13_faktaark.gpkg",
+                             layer="HB13_faktaark") %>%
+  # Typer som er eldre barskog: F08=Gammel barskog, F18=Gammel granskog, F19=Gammel furuskog
+  filter(naturtype %in% c("F08","F18","F19"))
+
+# HB13 restaurerbar
+HB13_eldrebarskog_fp <- st_read("/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Data/Kartlagte naturtyper/HB13/HB13_forbedringspotensial.gpkg") %>%
+  # Typer som er eldre barskog: F08=Gammel barskog, F18=Gammel granskog, F19=Gammel furuskog
+  filter(naturtype %in% c("F08","F18","F19"))
+
+# MI
+MI_eldrebarskog <- st_read("/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Data/Kartlagte naturtyper/Input_filer/Naturtyper_nin_32_akershus_25832_FILEGDB.gdb",
+                  layer="naturtyper_nin_omr") %>%
+  filter(grepl("Gammel furu|Gammel gran", naturtype))
+```
+
+## Eldre barskog med forbedringspotensial
+
+Finn bestander med høy andel av naturskogsnærhet.
+
+Først fjerner vi områder som er hogget eller nedbygd. I tillegg fjerner vi de polygonene som er mindre enn 1000 m2.
+
+```{r}
+
+# Fjern områder som er hogd de siste 30 årene
+hogst_satellitt <- ifel(!is.na(hogst_satellitt), 1, NA)
+hogst_satellitt <- as.polygons(hogst_satellitt, dissolve = TRUE)
+barskog <- erase(barskog, hogst_satellitt)
+
+# Fjern områder som er nedbygd
+graatt_areal <- aggregate(graatt_areal)
+barskog <- erase(barskog, graatt_areal)
+
+# Splitt multipolygoner
+barskog <- disagg(barskog)
+
+# Fjern små områder for å unngå slivers
+barskog <- barskog %>%
+  st_as_sf() %>%
+  mutate(areal=as.numeric(st_area(geometry))) %>%
+  filter(areal >= 1000)
+
+```
+
+For de resterende polygonene henter vi ut hvor mye naturskogsnærhet av kategori 3-5 som finnes i polygonene. Kun polygoner hvor minst 20 % av polygonenen har naturskogsnærhet 3-5 inkluderes videre.
+
+```{r}
+eldrebarskog_v <- extract(naturskogsnaerhet, barskog, fun=sum, na.rm=TRUE)
+eldrebarskog_v <- barskog %>%
+  st_as_sf()%>%
+  mutate(naturskogsnaerhet_sum=eldrebarskog_v[,2]) %>%
+  select(naturskogsnaerhet_sum) %>%
+  # Fjern de som er NA
+  filter(!is.na(naturskogsnaerhet_sum)) %>%
+  # Velg de områdene hvor antall naturskogsnærhets-celler dekker minst 20 % av polygonen
+  mutate(areal=as.numeric(st_area(geometry)),
+         naturskogsnaerhet_andel = (naturskogsnaerhet_sum*100)/areal) %>%
+  filter(naturskogsnaerhet_andel>=0.2)
+
+```
+
+## Økologisk prioritering
+
+Finn områder som er i nærheten av områder med indikatorarter for eldre barskog.
+
+Legg også til eldre barskog med forbedringspotensiale fra MI og HB13. Disse må deles i to om de viser god eller dårlig tilstand.
+
+```{r}
+# HB13 polygoner med god tilstand
+HB13_eldrebarskog_god <- HB13_eldrebarskog %>%
+  # Hvis en lokalitet er i HB13 eldre barskog med forbedringspotensial (HB13_eldrebarskog_fp), fjern fra "god tilstand"-datasettet
+  filter(!(identifikasjon_lokalId %in% HB13_eldrebarskog_fp$identifikasjon_lokalId))
+
+# MI god tilstand
+MI_eldrebarskog_god <- MI_eldrebarskog %>%
+  filter(tilstand %in% "god")
+
+# MI dårlig tilstand (moderat, dårlig og sværtRedusert)
+MI_eldrebarskog_fp <- MI_eldrebarskog %>%
+  filter(!(identifikasjon_lokalId %in% MI_eldrebarskog_god$identifikasjon_lokalId))
+
+# Klipp alle lagene mot grått areal og hogst
+HB13_eldrebarskog_god <- erase(vect(st_transform(HB13_eldrebarskog_god, 25833)), hogst_satellitt)
+HB13_eldrebarskog_god <- erase(HB13_eldrebarskog_god, graatt_areal)
+
+MI_eldrebarskog_god <- erase(vect(st_transform(MI_eldrebarskog_god, 25833)), hogst_satellitt)
+MI_eldrebarskog_god <- erase(MI_eldrebarskog_god, graatt_areal)
+
+MI_eldrebarskog_fp <- erase(vect(st_transform(MI_eldrebarskog_fp, 25833)), hogst_satellitt)
+MI_eldrebarskog_fp <- erase(MI_eldrebarskog_fp, graatt_areal)
+
+# Transformer tilbake til UTM 32, slik som de andre kriteriekartene
+HB13_eldrebarskog_god <- st_as_sf(HB13_eldrebarskog_god) %>% st_transform(25832)
+MI_eldrebarskog_god <- st_as_sf(MI_eldrebarskog_god) %>% st_transform(25832)
+MI_eldrebarskog_fp <- st_as_sf(MI_eldrebarskog_fp) %>% st_transform(25832)
+eldrebarskog_v <- st_transform(eldrebarskog_v, 25832)
+
+```
+
+## Eksporter
+
+```{r}
+
+temp_file <- "~/Mounts/scratch/tmp_ida/gpkg/eldrebarskog.gpkg" 
+final_file <- "/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Kriteriekart/eldrebarskog.gpkg" 
+
+# Slett filene først hvis de eksisterer
+if (file.exists(temp_file)) file.remove(temp_file)
+if (file.exists(final_file)) file.remove(final_file)
+
+st_write(eldrebarskog_v, temp_file, layer = "eldrebarskog", append=F)
+st_write(barskog_arter, temp_file, layer = "eldre_barskog_arter", append=F)
+st_write(HB13_eldrebarskog_god, temp_file, layer = "HB13_eldrebarskog_god_tilstand", append=F)
+st_write(HB13_eldrebarskog_fp, temp_file, layer = "HB13_eldrebarskog_forbedringspotensial", append=F)
+st_write(MI_eldrebarskog_god, temp_file, layer = "MI_eldrebarskog_god_tilstand", append=F)
+st_write(MI_eldrebarskog_fp, temp_file, layer = "MI_eldrebarskog_forbedringspotensial", append=F)
+
+file.copy(temp_file, final_file, overwrite = TRUE)
+```

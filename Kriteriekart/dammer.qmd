@@ -1,0 +1,218 @@
+---
+title: "dammer"
+format: html
+---
+
+```{r, echo=FALSE, results='hide'}
+
+# Sett tegnkodingen for teksthåndtering til norsk bokmål med UTF-8-encoding
+Sys.setlocale("LC_CTYPE", "nb_NO.UTF-8")
+
+# Last inn pakker
+packages <- c("readxl","readr","dplyr","sf", "mapview", "terra")
+sapply(packages, require, character.only = TRUE)
+```
+
+Prosesserer her to kriteriekart for dammer: gårdsdammer og naturlige dammer. Begge vil prosesseseres må samme måte.
+
+## Last inn og klargjør data
+
+Datakildene som brukes:
+
+-   Kartlag for gårdsdammer
+
+-   Kartlag for naturlige dammer
+
+-   Observasjoner av fremmedarter
+
+### Kartlag for gårdsdammer
+
+Er fordelt på kommunenivå, så slår de sammen.
+
+```{r}
+path <- "/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Data/Dammer/gardsdammer.gpkg"
+
+layers <- st_layers(path)
+
+layer_list <- lapply(layers$name, function(layer) {
+  st_read(path, layer = layer, quiet = TRUE)
+})
+
+gardsdammer <- do.call(rbind, layer_list) %>%
+  st_zm() %>%
+  st_transform(25832) %>%
+  select(-c(OBJECTID:Shape_Area))
+
+```
+
+### Kartlag for naturlige dammer
+
+Er fordelt på kommunenivå, så slår de sammen.
+
+```{r}
+path <- "/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Data/Dammer/naturlige_dammer.gpkg"
+
+layers <- st_layers(path)
+
+layer_list <- lapply(layers$name, function(layer) {
+  st_read(path, layer = layer, quiet = TRUE)
+})
+
+nat_dammer <- do.call(rbind, layer_list) %>%
+  st_zm() %>%
+  st_transform(25832) %>%
+  select(-c(OBJECTID:Shape_Area))
+```
+
+### Observasjoner av fremmedarter
+
+Observasjoner av fremmede karplanter som kan finnes i og rundt dammene.
+
+```{r}
+#fremmedarter <- read_csv("/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Data/Artsobservasjoner/Fremmedarter/artsobs_fremmed.csv") %>%
+#   st_as_sf(coords = c("X_32", "Y_32"), crs = 25832) 
+```
+
+### Kartlagte dammer etter HB13
+
+/Kriteriekart/kartlagtenaturtyper_HB13.gpkg") %\>%
+
+\# Typer som er eldre barskog: F08=Gammel barskog, F18=Gammel granskog, F19=Gammel furuskog
+
+```{r}
+#HB13_dam <- st_read("/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Data/Kartlagte naturtyper/HB13/HB13_faktaark.gpkg",
+#                             layer="HB13_faktaark") %>%
+  # Naturtypeu E09 = dam
+#  filter(naturtype %in% "E09")
+
+
+# HB13 restaurerbar
+#HB13_dam_fp <- st_read("/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Data/Kartlagte naturtyper/HB13/HB13_forbedringspotensial.gpkg") %>%
+  # Naturtypeu E09 = dam
+#  filter(naturtype %in% "E09")
+
+```
+
+## Dammer med forbedringspotensial
+
+Legg en buffer på 20 m rundt dammene for å fange opp fremmedarter rundt.
+
+```{r}
+#gardsdammer_b <- gardsdammer %>%
+#  st_buffer(20) %>%
+#  mutate(id = row_number())
+#nat_dammer_b <- nat_dammer %>%
+#  st_buffer(20) %>%
+#  mutate(id = row_number())
+```
+
+Trenger fremmedarter som er i dammer.
+
+```{r}
+#  fremmedarter_gardsdam <- terra::mask(terra::vect(fremmedarter), terra::vect(gardsdammer_b))
+#  fremmedarter_gardsdam <- st_as_sf(fremmedarter_gardsdam)
+  
+#  fremmedarter_natdam <- terra::mask(terra::vect(fremmedarter), terra::vect(nat_dammer_b))
+#  fremmedarter_natdam <- st_as_sf(fremmedarter_natdam)
+```
+
+```{r}
+
+oppsummer_fremmedarter <- function(dammer, dammer_buffer, fremmedarter_dam) {
+  
+  dammer <- dammer %>%
+    mutate(id = row_number())
+  
+  oppsummert <- st_join(dammer_buffer, fremmedarter_dam, left = TRUE) %>%
+    st_drop_geometry() %>%
+    group_by(id) %>%
+    summarise(
+  fremmed_n_obs = sum(!is.na(preferredPopularName)),
+  fremmed_n_arter = n_distinct(preferredPopularName, na.rm = TRUE),
+  fremmed_arter = if (all(is.na(preferredPopularName))) {
+    NA_character_
+  } else {
+    paste(sort(unique(na.omit(preferredPopularName))), collapse = ", ")
+  },
+  .groups = "drop"
+)
+  
+  dammer %>%
+    left_join(oppsummert, by = "id") %>%
+    mutate(
+      fremmed_n_obs = coalesce(fremmed_n_obs, 0L),
+      fremmed_n_arter = coalesce(fremmed_n_arter, 0L),
+      fremmed_arter = ifelse(is.na(fremmed_arter), NA, fremmed_arter)
+    )
+}
+
+```
+
+```{r}
+#dammer_fp <- list(
+#  gardsdammer = oppsummer_fremmedarter(gardsdammer, gardsdammer_b, fremmedarter_gardsdam),
+#  nat_dammer  = oppsummer_fremmedarter(nat_dammer, nat_dammer_b, fremmedarter_natdam)
+#)
+```
+
+Legger også til HB13 dam-kartlegginger, men splitter disse i to etter utforming og om de da tilhører gårdsdammer eller naturlige dammer.
+
+```{r}
+# Gårdsdammer
+#HB13_gardsdammer <- HB13_dam %>%
+#  filter(naturtypeUtforming == "E0901",
+         # Fjern de som er med forbedringspotensial
+#         !(identifikasjon_lokalId %in% HB13_dam_fp$identifikasjon_lokalId)
+#         )
+
+#HB13_gardsdammer_fp <- HB13_dam_fp %>%
+#  filter(naturtypeUtforming == "E0901")
+
+
+# Naturlige dammer
+#HB13_natdammer <- HB13_dam %>%
+#  filter(naturtypeUtforming %in% c("E0902", "E0903"),
+         # Fjern de som er med forbedringspotensial
+#         !(identifikasjon_lokalId %in% HB13_dam_fp$identifikasjon_lokalId)
+#         )
+
+#HB13_natdammer_fp <- HB13_dam_fp %>%
+#  filter(naturtypeUtforming %in% c("E0902", "E0903"))
+
+```
+
+## Eksporter
+
+Eksporterer gårdsdammer og naturlige dammer hver for seg
+
+```{r}
+temp_file <- "~/Mounts/scratch/tmp_ida/gpkg/gardsdammer.gpkg" 
+final_file <- "/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Kriteriekart/gardsdammer.gpkg" 
+
+# Slett filene først hvis de eksisterer
+if (file.exists(temp_file)) file.remove(temp_file)
+if (file.exists(final_file)) file.remove(final_file)
+
+st_write(gardsdammer, temp_file, layer = "gardsdammer", append=F) #dammer_fp$gardsdammer
+#st_write(fremmedarter_gardsdam, temp_file, layer = "gardsdam_fremmedarter", append=F)
+#st_write(HB13_gardsdammer, temp_file, layer = "HB13_gardsdammer_god", append=F)
+#st_write(HB13_gardsdammer_fp, temp_file, layer = "HB13_gardsdammer_forbedringspotensial", append=F)
+
+file.copy(temp_file, final_file, overwrite = TRUE)
+```
+
+```{r}
+temp_file <- "~/Mounts/scratch/tmp_ida/gpkg/naturlige_dammer.gpkg" 
+final_file <- "/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Kriteriekart/naturlige_dammer.gpkg" 
+
+# Slett filene først hvis de eksisterer
+if (file.exists(temp_file)) file.remove(temp_file)
+if (file.exists(final_file)) file.remove(final_file)
+
+st_write(nat_dammer, temp_file, layer = "naturlige_dammer", append=F) #dammer_fp$nat_dammer
+#st_write(fremmedarter_natdam, temp_file, layer = "nat_dammer_fremmedarter", append=F)
+#st_write(HB13_natdammer, temp_file, layer = "HB13_nat_dammer_god", append=F)
+#st_write(HB13_natdammer_fp, temp_file, layer = "HB13_nat_dammer_forbedringspotensial", append=F)
+
+file.copy(temp_file, final_file, overwrite = TRUE)
+```
