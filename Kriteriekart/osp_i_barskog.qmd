@@ -31,7 +31,7 @@ Datakildene som brukes:
 
 ```{r}
 barblandingsskog <- st_read(
-  "/data/R/GeoSpatialData/LandCover/Norway_ForestResources_SR16_NIBIO/Original/32_25832_SR16_GDB/32_25832_SR16_GDB.gdb",
+  "/data/R/GeoSpatialData/LandCover/Norway_ForestResources_SR16_NIBIO/Original/versjon2025/32_25832_SR16_GDB/32_25832_SR16_GDB.gdb",
   # Filtrer for å kun få ut barskog og blandingsskog (1=grandominert, 2=furudominert, 3=barblanding, 4=blanding)
   query = "SELECT * FROM SkogressursFlate WHERE srtreslagsam IN (1,2,3,4)"
 ) %>%
@@ -125,7 +125,7 @@ osp_arter_barskog <-  mask(vect(osp_arter), vect(osp_barskog))
 osp_arter_barskog <- st_as_sf(osp_arter_barskog)
 
 osp_barskog <- st_join(osp_barskog, osp_arter_barskog) %>%
-  group_by(gid) %>%   # bytt til riktig ID-kolonne i polygonet
+  group_by(gid) %>%
   summarise(
     n_obs = n(),
     n_arter = n_distinct(preferredPopularName),
@@ -134,16 +134,16 @@ osp_barskog <- st_join(osp_barskog, osp_arter_barskog) %>%
 
 ```
 
-Vi legger i tillegg på kartlagte naturtyper med osp som overlapper med SR16 V barskog.
+Vi legger i tillegg på kartlagte naturtyper med osp som overlapper med SR16 V barskog og blandingsskog.
 
 ```{r}
 # HB13
 i <- st_intersects(HB13_osp, barblandingsskog)
-HB13_osp_barskog <- HB13_osp[lengths(i) == 0, ]
+HB13_osp_barskog <- HB13_osp[lengths(i) > 0, ]
   
 # MI
 i <- st_intersects(MI_osp, barblandingsskog)
-MI_osp_barskog <- MI_osp[lengths(i) == 0, ]
+MI_osp_barskog <- MI_osp[lengths(i) > 0, ]
 
 ```
 

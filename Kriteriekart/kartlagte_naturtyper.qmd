@@ -222,11 +222,13 @@ file.copy(temp_file, final_file, overwrite = TRUE)
 
 ### Fjern områder som overlapper med hogstflater og grå arealer
 
-Fjern de som er i andre kriteriekart.
+Fjern de som er i andre kriteriekart. HB13-dammer holdes også utenfor.
 
 ```{r}
 HB13_fp1 <- HB13_fp %>%
-  filter(! identifikasjon_lokalId %in% kn_id_fp)
+  filter(! identifikasjon_lokalId %in% kn_id_fp,
+         # Dammer (E09) holdes utenfor, de hører til kriteriekartet for dammer
+         naturtype != "E09")
 ```
 
 ```{r}
@@ -424,11 +426,11 @@ MI_fp4 <- MI_fp4 %>%
 
 ## Klargjør fremmedarter for eksport
 
-Noen observasjoner vil antagelig både overlappe med MI og HB13 fordi disse overlapper med hverandre, så vi vil kun ha unike observasjoner.
+Noen observasjoner vil antagelig både overlappe med MI og HB13 fordi disse overlapper med hverandre, så vi vil kun ha unike observasjoner. Velger derfor kun kolonnene fra artsobservasjonene, ikke kolonnene fra naturtypene.
 
 ```{r}
-naturtyper_fp_fa <- bind_rows(MI_fp_fa %>% select(proxyId:identifikasjon_navnerom),
-                              HB13_fp_fa %>% select(proxyId:identifikasjon_navnerom)) %>%
+naturtyper_fp_fa <- bind_rows(MI_fp_fa %>% select(all_of(names(fremmedarter))),
+                              HB13_fp_fa %>% select(all_of(names(fremmedarter)))) %>%
   distinct()
 
 ```

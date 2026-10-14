@@ -9,7 +9,7 @@ format: html
 Sys.setlocale("LC_CTYPE", "nb_NO.UTF-8")
 
 # Last inn pakker
-packages <- c("dplyr","sf", "mapview", "terra", "tidyr")
+packages <- c("dplyr","sf", "mapview", "terra", "tidyr", "stringr")
 sapply(packages, require, character.only = TRUE)
 
 ```
@@ -76,7 +76,8 @@ Fjern de grøftene som er mindre enn 2 m2.
 ```{r}
 grofter_myrskog <- grofter_myrskog %>%
   mutate(areal = as.numeric(st_area(.))) %>%
-  filter(areal > 2) 
+  filter(areal > 2) %>%
+  select(areal)
 ```
 
 ## Myr og skog med grøfter
@@ -116,9 +117,9 @@ groft_areal_per_myr <- myr_groft_kobling %>%
 # Koble til ar5myr
 ar5myr_groft <- ar5myr %>%
   left_join(groft_areal_per_myr, by = "lokalid") %>%
-  # Fjern de som ikke har grøfter
-  filter(!is.na(grofter_areal))%>%
-  select(lokalid, versjonid, arealtype, grofter_areal) 
+  # Fjern de som ikke har grøfter og de som har under 10 m2 med grøfter
+  filter(!is.na(grofter_areal) & grofter_areal >= 10) %>%
+  select(lokalid, versjonid, arealtype, grofter_areal)
 
 ```
 
@@ -182,7 +183,7 @@ temp_file <- "~/Mounts/scratch/tmp_ida/gpkg/grofter_myrskog.gpkg"
 final_file <- "/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Kriteriekart/grofter_myrskog.gpkg" 
 
 
-st_write(grofter_myrskog2, temp_file, layer = "grofter_myrskog", append=F)
+st_write(grofter_myrskog, temp_file, layer = "grofter_myrskog", append=F)
 st_write(ar5myr_groft, temp_file, layer = "ar5myr_groft", append=F)
 st_write(HB13_grofter, temp_file, layer = "HB13_grofter", append=F)
 st_write(MI_grofter, temp_file, layer = "MI_grofter", append=F)

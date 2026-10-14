@@ -47,11 +47,6 @@ akerhus_sf <- kommuner %>%
 path <- "/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Data/Kartlagte naturtyper/HB13/HB13_faktaark.gpkg"
 
 naturtyper_hb13 <- st_read(path)
-
-# Datasett med kun HB13 som har forbedringspotensial
-path <- "/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Data/Kartlagte naturtyper/HB13/HB13_forbedringspotensial.gpkg"
-
-naturtyper_hb13_fp <- st_read(path)
 ```
 
 ### Miljødirektoratets instruks (dekningskart)
@@ -73,6 +68,8 @@ fremmedarter <- read_csv("/data/P-Prosjekter2/155014_restaurerbar_natur_akershus
 ```
 
 ### Artsobservasjoner av biller, sopp og lav
+
+Bruker uttrekket fra Artskart fra 2025, fordi det inneholder biller. Uttrekket fra 2026 (se Kartgrunnlag/artsobservasjoner.qmd) inneholder kun karplanter, sopp, lav og moser.
 
 ```{r}
 
@@ -270,27 +267,12 @@ naturtyper_MI_huleeiker_fp <- naturtyper_MI_huleeiker %>%
 
 ## Hule eiker datasett
 
-# Sf
-naturtyper_huleeiker_sf <- rbind(hb13_fb %>% 
-                                   select(identifikasjon_lokalId) ,
-                              naturtyper_MI_huleeiker_fp %>% 
-                                select(identifikasjon_lokalId)%>%
-                                   rename(geom="SHAPE")
-                              ) %>%
-  arrange()
-
-# Df
-naturtyper_huleeikerdf <- hb13_fb %>%
-  st_drop_geometry() %>%
-  full_join(naturtyper_MI_huleeiker_fp %>%
-              st_drop_geometry())  %>%
-  arrange()
-
-# Slå sammen til en sf
-naturtyper_huleeiker <- cbind(naturtyper_huleeiker_sf, 
-                              naturtyper_huleeikerdf %>% 
-                                select(-identifikasjon_lokalId)
-                              )
+# Slå sammen radene fra HB13 og MI. Kolonner som bare finnes i det ene datasettet får NA i det andre
+naturtyper_huleeiker <- bind_rows(hb13_fb,
+                                  naturtyper_MI_huleeiker_fp %>%
+                                    rename(geom = "SHAPE")) %>%
+  # Gjør kolonnenavnene gyldige i R, slik at for eksempel 1AG-A-G blir X1AG.A.G
+  rename_with(make.names, -geom)
 
 ```
 

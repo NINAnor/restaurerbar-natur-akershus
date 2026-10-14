@@ -9,7 +9,7 @@ format: html
 Sys.setlocale("LC_CTYPE", "nb_NO.UTF-8")
 
 # Last inn pakker
-packages <- c("dplyr","sf", "mapview", "terra")
+packages <- c("dplyr","readr","sf", "mapview", "terra")
 sapply(packages, require, character.only = TRUE)
 ```
 
@@ -46,7 +46,7 @@ askershusbbox <- vect(askershusbbox)
 
 ```{r}
 lauvskog <- st_read(
-  "/data/R/GeoSpatialData/LandCover/Norway_ForestResources_SR16_NIBIO/Original/32_25832_SR16_GDB/32_25832_SR16_GDB.gdb",
+  "/data/R/GeoSpatialData/LandCover/Norway_ForestResources_SR16_NIBIO/Original/versjon2025/32_25832_SR16_GDB/32_25832_SR16_GDB.gdb",
   # Filtrer for å kun få ut lauvskog og blandingsskog (4=blanding, 5=lauvdominert)
   query = "SELECT * FROM SkogressursFlate WHERE srtreslagsam IN (4,5)"
 ) #%>%
@@ -158,7 +158,7 @@ edellauv_skog <- edellauv_skog %>%
   filter(areal >= 1000)
 ```
 
-Områder skal ikke være eldre enn 40 år.
+Områder skal være 40 år eller eldre.
 
 ```{r}
 
@@ -166,25 +166,26 @@ edellauv_skog_alder <- extract(skogalder, edellauv_skog, fun=mean, na.rm=TRUE)
 edellauv_skog <- edellauv_skog %>%
   st_as_sf()%>%
   mutate(alder=edellauv_skog_alder[,2]) %>%
-  # Inkluder kun de områdene som er eldre enn 40 år
+  # Inkluder kun de områdene som er 40 år eller eldre
   filter(alder >= 40)
 
 ```
 
 ## Edellauvskog med forbedringspotensial
 
-Tilstedeværelse av fremmedarter og gran tilsier at lokaliteten har forbedringspotensial.
+Tilstedeværelse av fremmedarter og gran tilsier at lokaliteten har forbedringspotensial. Kun edellauvskog med fremmedarter eller gran tas med videre.
 
 ```{r}
-# Vil også inkludere de som ikke har fremmedarter, så her filtrerer vi først bort de fremmedartsobservasjonene som ikke er i en edellauvskog-polygon
+# Behold kun edellauvskog som har observasjoner av fremmedarter eller gran
 edellauv_skog_fa <- mask(vect(edellauv_skog), vect(fremmedarter_gran))
 edellauv_skog_fa <- st_as_sf(edellauv_skog_fa)
 
+# Hent ut observasjonene av fremmedarter og gran som er i edellauvskogen
 edellauv_skog_arter_fp <-  mask(vect(fremmedarter_gran), vect(edellauv_skog))
 edellauv_skog_arter_fp <- st_as_sf(edellauv_skog_arter_fp)
 
 edellauv_skog_fa <- st_join(edellauv_skog_fa, edellauv_skog_arter_fp) %>%
-   group_by(gid) %>%   # bytt til riktig ID-kolonne i polygonet
+   group_by(gid) %>%
    summarise(
      fremmed_n_obs = n(),
      fremmed_n_arter = n_distinct(preferredPopularName),
@@ -201,7 +202,7 @@ edellauv_arter_skog <-  mask(vect(edellauv_arter), vect(edellauvsskog_artsobs_in
 edellauv_arter_skog <- st_as_sf(edellauv_arter_skog)
 
 edellauvsskog_artsobs <- st_join(edellauvsskog_artsobs_ind, edellauv_arter_skog) %>%
-  group_by(gid) %>%   # bytt til riktig ID-kolonne i polygonet
+  group_by(gid) %>%
   summarise(
     n_obs = n(),
     n_arter = n_distinct(preferredPopularName),
@@ -258,11 +259,6 @@ final_file <- "/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Krite
 if (file.exists(temp_file)) file.remove(temp_file)
 if (file.exists(final_file)) file.remove(final_file)
 
-edellauvsskog_artsobs <- st_read(final_file, layer = "edellauvskog")
-edellauv_arter_skog <- st_read(final_file, layer = "edellauvskog_indarter")
-edellauv_skog_arter_fp <- st_read(final_file, layer = "edellauvskog_fremmedarter")
-HB13_edellauv_god <- st_read(final_file, layer = "HB13_edellauv_god_tilstand")
-HB13_edellauv_fp <- st_read(final_file, layer = "HB13_edellauv_forbedringspotensial")
 
 st_write(edellauvsskog_artsobs, temp_file, layer = "edellauvskog", append=F)
 st_write(edellauv_arter_skog, temp_file, layer = "edellauvskog_indarter", append=F)

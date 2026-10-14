@@ -9,7 +9,7 @@ format: html
 Sys.setlocale("LC_CTYPE", "nb_NO.UTF-8")
 
 # Last inn pakker
-packages <- c("dplyr","sf", "mapview", "terra", "lwgeom")
+packages <- c("dplyr","readr","sf", "mapview", "terra", "lwgeom")
 sapply(packages, require, character.only = TRUE)
 
 ```
@@ -34,7 +34,7 @@ Datakildene som brukes:
 
 ### AR5
 
-Last inn områder med skog og åpen fastmark (30 - Skog; 50 - Åpen fastmark) og åker (21 - Fulldyrka jord; 22 - Overflatedyrka jord).
+Last inn områder med skog og åpen fastmark (30 - Skog; 50 - Åpen fastmark). Last også inn hele AR5 for å finne hvilke arealtyper som grenser til fastmarka. Åker er fulldyrka jord (21).
 
 ```{r}
 ar5_fastmark <- st_read(
@@ -145,14 +145,12 @@ akerholmer4 <- akerholmer3[
   
 ```
 
-Fjern de fastmarksområdene som er veldig store for å kun stå igjen med øyer (\<30 000 m2). Fjerner også de som er veldig små (\>500 m2)
+Fjern de fastmarksområdene som er veldig store (30 000 m2 eller større), slik at vi kun står igjen med øyer. Fjerner også de som er veldig små (500 m2 eller mindre).
 
 ```{r}
 akerholmer5 <- akerholmer4 %>%
   mutate(areal=as.numeric(st_area(SHAPE))) %>%
   filter(areal < 30000 & areal > 500)
-
-akerholmer_f <- akerholmer5
 ```
 
 ```{r}
@@ -161,12 +159,9 @@ mapview(akerholmer5)
 
 ## Finn åkerholmer
 
-Bruker TWI
+Bruker strømningsakkumulering (flow accumulation) fra DTM10. Åkerholmer der medianen av strømningsakkumuleringen er 2 eller lavere beholdes.
 
 ```{r}
-
-
-
 # Sett det som ikke overlapper med åkerholmer-laget til NA
 fa_na <- mask(fa, akerholmer5 %>% st_transform(25833))
 
@@ -175,7 +170,7 @@ pts <- pts %>%
   st_as_sf() %>%
   st_transform(25832)
 
-#
+# Gi hver åkerholme en ID
 akerholmer5 <- akerholmer5 %>%
   mutate(lokalid = row_number())
 
@@ -194,7 +189,7 @@ akerholmer6 <- akerholmer5 %>%
 akerholmer_t <- akerholmer6 %>%
   filter(FA_median <= 2)
 
-
+akerholmer_f <- akerholmer_t
 ```
 
 ## Åkerholmer med forbedringspotensial
@@ -208,7 +203,7 @@ akerholmer_arter_fp <-  mask(vect(fremmedarter_gran), vect(akerholmer_f))
 akerholmer_arter_fp <- st_as_sf(akerholmer_arter_fp)
 
 akerholmer_fa <- st_join(akerholmer_f, akerholmer_arter_fp) %>%
-   group_by(lokalid) %>%   # bytt til riktig ID-kolonne i polygonet
+   group_by(lokalid) %>%
    summarise(
      fremmed_n_obs = n(),
      fremmed_n_arter = n_distinct(preferredPopularName),
@@ -216,10 +211,7 @@ akerholmer_fa <- st_join(akerholmer_f, akerholmer_arter_fp) %>%
    ) %>%
   mutate(fremmed_arter = ifelse(fremmed_arter == "NA", NA, fremmed_arter),
          fremmed_n_obs = ifelse(is.na(fremmed_arter), NA, fremmed_n_obs),
-    fremmed_n_obs = ifelse(is.na(fremmed_arter), NA, fremmed_n_obs),
          fremmed_n_arter = ifelse(is.na(fremmed_arter), NA, fremmed_n_arter))
-
-
 ```
 
 For HB13 åkerholmer ser det ut til at alle i Akershus generelt kan ha dårlig tilstand.
@@ -229,12 +221,12 @@ For HB13 åkerholmer ser det ut til at alle i Akershus generelt kan ha dårlig t
 Legg til informasjon om edellauvskogsarter, engarter og rødlistede arter til økologisk prioritering.
 
 ```{r}
-# Først, hent ut de observasjonene av fremmedarter og gran som overlapper med åkerholmer
+# Først, hent ut de observasjonene av edellauvskogsarter, engarter og rødlistede arter som overlapper med åkerholmer
 akerholmer_arter_p <-  mask(vect(prioritering_arter), vect(akerholmer_f))
 akerholmer_arter_p <- st_as_sf(akerholmer_arter_p)
 
 akerholmer_fa_p <- st_join(akerholmer_fa, akerholmer_arter_p) %>%
-   group_by(lokalid) %>%   # bytt til riktig ID-kolonne i polygonet
+   group_by(lokalid) %>%
    summarise(
      prioritering_n_obs = n(),
      prioritering_n_arter = n_distinct(preferredPopularName),

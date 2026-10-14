@@ -35,15 +35,12 @@ Datakildene som brukes:
 ```{r}
 akershus <- st_read("/data/R/GeoSpatialData/AdministrativeUnits/Norway_AdministrativeUnits/Original/Norway_County/versjon2024/Administrative_enheter_fylker_2024_FGDB-format/Basisdata_32_Akershus_25832_Fylker2024_FGDB.gdb", layer="fylke")
 
-# Mange kart er for hele Norge, og vi trenger kun å prosessere data for Akershus
+# Mange kart er for hele Norge, og vi trenger kun å prosessere data for Akershus.
+# Naturskogsnærhet og hogstflater er i UTM 33, så alle lag prosesseres i UTM 33 og transformeres til UTM 32 før eksport
 askershusbbox <- st_bbox(akershus) %>%
   st_as_sfc() %>%
   st_transform(25833) %>%
   vect()
-
-# Testkommune: Nesodden og Frogn
-testkommuner <- st_read("/data/R/GeoSpatialData/AdministrativeUnits/Norway_AdministrativeUnits/Original/Norway_Municipalities/versjon2025/Administrative enheter kommuner FGDB-format/Basisdata_0000_Norge_25833_Kommuner_FGDB/Basisdata_0000_Norge_25833_Kommuner_FGDB.gdb", layer="kommune") %>%
-  filter(kommunenavn %in% c("Nesodden", "Frogn"))
 
 ```
 
@@ -51,7 +48,7 @@ testkommuner <- st_read("/data/R/GeoSpatialData/AdministrativeUnits/Norway_Admin
 
 ```{r}
 barskog <- st_read(
-  "/data/R/GeoSpatialData/LandCover/Norway_ForestResources_SR16_NIBIO/Original/32_25832_SR16_GDB/32_25832_SR16_GDB.gdb",
+  "/data/R/GeoSpatialData/LandCover/Norway_ForestResources_SR16_NIBIO/Original/versjon2025/32_25832_SR16_GDB/32_25832_SR16_GDB.gdb",
   # Filtrer for å kun få ut barskog (1=grandominert, 2=furudominert, 3=barblanding)
   query = "SELECT * FROM SkogressursFlate WHERE srtreslagsam IN (1,2,3)"
 ) %>%
@@ -88,7 +85,8 @@ hogst_satellitt <- rast("/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/
 ```{r}
 
 graatt_areal <- st_read("/data/R/GeoSpatialData/LandCover/Norway_Grå_Arealer_versjon1/Original/Kart over grå arealer GeoPackage-format/32_25835_graastruktur_gpkg.gpkg") %>%
-  st_transform(25832) %>%
+  # Samme koordinatsystem som naturskogsnærhet, hogstflater og barskog (UTM 33)
+  st_transform(25833) %>%
   vect()
 
 ```
@@ -127,12 +125,6 @@ Finn bestander med høy andel av naturskogsnærhet.
 Først fjerner vi områder som er hogget eller nedbygd. I tillegg fjerner vi de polygonene som er mindre enn 1000 m2.
 
 ```{r}
-
-# Denne tar lang tid å kjøre, så gjør det bare for testkommuner først
-#naturskogsnaerhet <- crop(naturskogsnaerhet,testkommuner)
-#barskog <- crop(barskog, testkommuner)
-#hogst_satellitt <- mask(hogst_satellitt, vect(testkommuner))
-#graatt_areal <- mask(vect(graatt_areal), vect(testkommuner))
 
 # Fjern områder som er hogd de siste 30 årene
 hogst_satellitt <- ifel(!is.na(hogst_satellitt), 1, NA)
@@ -192,18 +184,20 @@ MI_eldrebarskog_fp <- MI_eldrebarskog %>%
   filter(!(identifikasjon_lokalId %in% MI_eldrebarskog_god$identifikasjon_lokalId))
 
 # Klipp alle lagene mot grått areal og hogst
-HB13_eldrebarskog_god <- erase(vect(HB13_eldrebarskog_god), hogst_satellitt)
+HB13_eldrebarskog_god <- erase(vect(st_transform(HB13_eldrebarskog_god, 25833)), hogst_satellitt)
 HB13_eldrebarskog_god <- erase(HB13_eldrebarskog_god, graatt_areal)
 
-MI_eldrebarskog_god <- erase(vect(MI_eldrebarskog_god), hogst_satellitt)
+MI_eldrebarskog_god <- erase(vect(st_transform(MI_eldrebarskog_god, 25833)), hogst_satellitt)
 MI_eldrebarskog_god <- erase(MI_eldrebarskog_god, graatt_areal)
 
-MI_eldrebarskog_fp <- erase(vect(MI_eldrebarskog_fp), hogst_satellitt)
+MI_eldrebarskog_fp <- erase(vect(st_transform(MI_eldrebarskog_fp, 25833)), hogst_satellitt)
 MI_eldrebarskog_fp <- erase(MI_eldrebarskog_fp, graatt_areal)
 
-HB13_eldrebarskog_god <- st_as_sf(HB13_eldrebarskog_god)
-MI_eldrebarskog_god <- st_as_sf(MI_eldrebarskog_god)
-MI_eldrebarskog_fp <- st_as_sf(MI_eldrebarskog_fp)
+# Transformer tilbake til UTM 32, slik som de andre kriteriekartene
+HB13_eldrebarskog_god <- st_as_sf(HB13_eldrebarskog_god) %>% st_transform(25832)
+MI_eldrebarskog_god <- st_as_sf(MI_eldrebarskog_god) %>% st_transform(25832)
+MI_eldrebarskog_fp <- st_as_sf(MI_eldrebarskog_fp) %>% st_transform(25832)
+eldrebarskog_v <- st_transform(eldrebarskog_v, 25832)
 
 ```
 
