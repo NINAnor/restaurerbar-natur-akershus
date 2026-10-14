@@ -2,3 +2,16 @@
 .Rhistory
 .RData
 .Ruserdata
+.RDataTmp
+
+# Bekkeåpninger er ikke ferdig og skal ikke på GitHub
+Kriteriekart/bekkeapninger*
+
+# Rendret Quarto-output
+*.html
+*_files/
+
+# Data skal ikke ligge i repoet
+*.gdb/
+*.gpkg
+*.zip
