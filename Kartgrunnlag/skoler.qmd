@@ -1,0 +1,44 @@
+---
+title: "skoler"
+format: html
+---
+
+```{r, echo=FALSE, results='hide'}
+
+# Sett tegnkodingen for teksthåndtering til norsk bokmål med UTF-8-encoding
+Sys.setlocale("LC_CTYPE", "nb_NO.UTF-8")
+
+# Last inn pakker
+packages <- c("dplyr","sf", "mapview", "terra", "readr")
+sapply(packages, require, character.only = TRUE)
+
+```
+
+Viser områder 200 m unna skoler (grunnskole og videregående).
+
+```{r}
+vgs <- st_read("/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Data/Skoler/Befolkning_32_Akershus_25832_Videregaendeskoler_FGDB.gdb")
+
+gs <- st_read("/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Data/Skoler/Befolkning_32_Akershus_25832_Grunnskoler_FGDB.gdb")
+
+```
+
+```{r}
+
+skoler500 <- vgs %>%
+  bind_rows(gs) %>%
+  select(skolenavn, objtype) %>%
+  st_buffer(500)
+
+skoler200 <- vgs %>%
+  bind_rows(gs) %>%
+  select(skolenavn, objtype) %>%
+  st_buffer(200)
+
+temp_file <- "~/Mounts/scratch/tmp_ida/gpkg/skoler.gpkg" 
+final_file <- "/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Tilleggsdata/skoler.gpkg" 
+st_write(skoler200, temp_file, layer = "skoler_b200m", append=F)
+st_write(skoler500, temp_file, layer = "skoler_b500m", append=F)
+
+file.copy(temp_file, final_file, overwrite = TRUE)
+```

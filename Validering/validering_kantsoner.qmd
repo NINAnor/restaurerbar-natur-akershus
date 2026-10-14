@@ -1,0 +1,65 @@
+---
+title: "validering_kantsoner"
+format: html
+---
+
+```{r, echo=FALSE, results='hide'}
+
+# Sett tegnkodingen for teksthåndtering til norsk bokmål med UTF-8-encoding
+Sys.setlocale("LC_CTYPE", "nb_NO.UTF-8")
+
+# Last inn pakker
+packages <- c("readxl", "dplyr","sf", "mapview", "terra", "lwgeom", "purrr", "broom", "tidyr", "ggplot2", "NinaR")
+sapply(packages, require, character.only = TRUE)
+
+```
+
+Skal her gjøre en vurdering om valideringspunktene treffer spesifikke klasser av eldre barskog og edellauvskog for å se etter forbedringer til senere.
+
+## Last inn data
+
+### Valideringspunkter
+
+```{r}
+valideringsdata <- st_read("/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Data/Validering/2026/restaurerbarnatur_validering_25_26.gpkg")
+```
+
+### Kantsoner langs vassdrag
+
+```{r}
+kant_vassdrag <- st_read("/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Kriteriekart/vassdrag_kant_lavland_uten_vegetasjon_v4.gpkg")
+
+```
+
+## Vurder kantsoner langs vassdrag
+
+```{r}
+kant_vassdrag_punkter <- valideringsdata %>%
+  filter(kriteriekart == "Unvegetated riparian strips")
+
+
+# Hent ut infomrasjon fra kant_vassdrags-kartet for hvert punkt
+kant_vassdrag_punktere <- st_join(kant_vassdrag_punkter, kant_vassdrag, join = st_within)
+
+
+ggplot(kant_vassdrag_punktere, aes(x = restaurerbart_validering, y = naturskogsnaerhet_andel)) +
+  geom_boxplot(outlier.shape = NA, fill = "grey85", alpha = 0.6) +
+  geom_jitter(width = 0.15, alpha = 0.5, size = 1.5, color = "darkgreen") +
+  labs(
+    x = "Restaurerbart (validering)",
+    y = "Andel naturskognærhet",
+    title = "Naturskognærhet etter valideringskategori"
+  ) +
+  theme_minimal()
+
+ggplot(kant_vassdrag_punktere, aes(x = restaurerbart_validering, y = naturskogsnaerhet_sum)) +
+  geom_boxplot(outlier.shape = NA, fill = "grey85", alpha = 0.6) +
+  geom_jitter(width = 0.15, alpha = 0.5, size = 1.5, color = "darkgreen") +
+  labs(
+    x = "Restaurerbart (validering)",
+    y = "Mengden naturskogsnærhets-celler (kat 3-5)",
+    title = "Naturskognærhet etter valideringskategori"
+  ) +
+  theme_minimal()
+
+```

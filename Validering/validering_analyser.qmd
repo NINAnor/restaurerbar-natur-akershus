@@ -1,0 +1,140 @@
+---
+title: "validering_analyser"
+format: html
+---
+
+```{r, echo=FALSE, results='hide'}
+
+# Sett tegnkodingen for teksthåndtering til norsk bokmål med UTF-8-encoding
+Sys.setlocale("LC_CTYPE", "nb_NO.UTF-8")
+
+# Last inn pakker
+packages <- c("readxl", "dplyr","sf", "mapview", "terra", "lwgeom", "purrr", "broom", "tidyr", "ggplot2", "NinaR")
+sapply(packages, require, character.only = TRUE)
+
+```
+
+```{r}
+valideringsdata <- st_read("/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Data/Validering/2026/restaurerbarnatur_validering_25_26.gpkg")
+```
+
+```{r}
+
+threshold <- 0.5
+
+# First calculate accuracy within each independent unit
+
+accuracy_by_unit <- valideringsdata %>%
+  st_drop_geometry() %>%
+  # Fjern bekkeåpninger siden det er for få observasjoner
+  filter(kriteriekart != "bekkapninger") %>%
+  group_by(kriteriekart, SSBID) %>%
+  summarise(
+    n_points = n(),
+    correct = sum(TP),
+    accuracy = mean(TP),
+    .groups = "drop"
+  )
+
+# Then summarize across SSBID × naturtype units
+accuracy_results <- accuracy_by_unit %>%
+  group_by(kriteriekart) %>%
+  summarise(
+    n = n(),
+    mean_accuracy = mean(accuracy),
+    sd_accuracy = sd(accuracy),
+    se_accuracy = sd(accuracy) / sqrt(n),
+    lower = mean_accuracy - qt(0.975, df = n - 1) * se_accuracy,
+    upper = mean_accuracy + qt(0.975, df = n - 1) * se_accuracy,
+    p_value = t.test(
+      accuracy,
+      mu = threshold,
+      alternative = "greater"
+    )$p.value,
+    .groups = "drop"
+  ) %>%
+  mutate(
+    lower = pmax(0, lower),
+    upper = pmin(1, upper),
+    significant = if_else(
+      p_value < 0.05,
+      "Significant (p < 0.05)",
+      "Not significant"
+    )
+  )
+
+
+
+p <- ggplot(
+  accuracy_results,
+  aes(
+    x = reorder(kriteriekart, mean_accuracy),
+    y = mean_accuracy,
+    shape = significant
+  )
+) +
+  geom_hline(
+    yintercept = threshold,
+    linetype = "dashed"
+  ) +
+  geom_errorbar(
+    aes(ymin = lower, ymax = upper),
+    width = 0.2
+  ) +
+  geom_point(size = 3, aes(group = significant, col = significant)) +
+  scale_color_manual(values = c(NinaR::nina_colors[[2]], NinaR::nina_colors[[3]])) +
+  geom_text(
+    aes(
+      x = reorder(kriteriekart, mean_accuracy),
+      y = 1.03,
+      label = paste0("n = ", n)
+    ),
+    hjust = 0,
+    size = 3.5
+  ) +
+  #geom_text(
+  #  aes(
+  #    y = upper + 0.03,
+  #    label = if_else(
+  #      significant == "Significant",
+  #      "*",
+  #      "ns"
+  #    )
+  #  ),
+  #  hjust = -0.8,
+  #  size = 4
+  #) +
+  coord_flip(clip = "off") +
+  scale_y_continuous(
+    limits = c(0, 1.1),
+    breaks = seq(0, 1, 0.2),
+    labels = function(x) {
+      ifelse(x <= 1, scales::percent(x), "")
+    }
+  ) +
+  labs(
+    x = " ",
+    y = "Accuracy",
+    shape = NULL#,
+    #caption = "* p < 0.05; ns = not significant"
+  ) +
+  theme_minimal() +
+  theme(
+    plot.margin = margin(5.5, 40, 5.5, 5.5)
+  ) +
+  guides(shape="none")
+
+
+#
+ggsave(
+  filename = "/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Resultater/Validering/accuracy_by_class_25_26_data.png",
+  plot = p,
+  width = 10,
+  height = 6,
+  dpi = 150,
+  bg = "white"
+)
+
+# Eksporter resultater
+accuracy_results %>% openxlsx::write.xlsx("/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Resultater/Validering/accuracy_by_class_25_26_data.xlsx")
+```

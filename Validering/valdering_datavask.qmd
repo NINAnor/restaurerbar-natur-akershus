@@ -1,0 +1,424 @@
+---
+title: "valdering_datavask"
+format: html
+---
+
+```{r, echo=FALSE, results='hide'}
+
+# Sett tegnkodingen for teksthåndtering til norsk bokmål med UTF-8-encoding
+Sys.setlocale("LC_CTYPE", "nb_NO.UTF-8")
+
+# Last inn pakker
+packages <- c("readxl", "dplyr","sf", "mapview", "terra", "lwgeom", "stringr")
+sapply(packages, require, character.only = TRUE)
+```
+
+Vaske data før analyser.
+
+Importer SSB 1 km rutenett.
+
+```{r}
+
+ssb1km <- st_read("/data/R/GeoSpatialData/Population_demography/Norway_SSB/Original/ssb_1km/ssb1km.shp") %>%
+  st_transform(25832) %>%
+  select(SSBID)
+```
+
+## Feltdata 2026
+
+```{r}
+#unzip("/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Data/Feltdata/Restaurerbar_natur_210926.zip", exdir="/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Data/Feltdata/September")
+
+feltdata_p <- st_read("/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Data/Feltdata/September/769116d8-46d8-45a2-879a-0b96a11ba4aa.gdb", layer="Restaurerbart_punkt")
+
+feltdata_poly <- st_read("/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Data/Feltdata/September/769116d8-46d8-45a2-879a-0b96a11ba4aa.gdb", layer="Restaurerbart_område")
+```
+
+Eksporter som excel-ark slik at andre kan eventuelt se over og vaske.
+
+```{r}
+arkene <- list("punkter"=feltdata_p %>% st_drop_geometry(), 
+               "polygoner"=feltdata_poly %>% st_drop_geometry())
+openxlsx::write.xlsx(arkene, file = "/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Data/Feltdata/feltdata_til_vask.xlsx", 
+                     colNames = TRUE)
+```
+
+### Vask data
+
+Vask gdb data. Det er flere feil i dataene som må rettes på. Gjør samtidig en sammenligning mot kriteriekartene som punktene overlapper med.
+
+```{r}
+mappe <- "/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Kriteriekart"
+
+# Finn alle gpkg-filer
+gpkg_filer <- list.files(mappe, pattern = "gpkg$", full.names = TRUE)
+
+# Fjern kartlagte naturtyper hvis den allerede er eksportert. Hvis ikke vil alle polygoner fjernes senere
+gpkg_filer <- gpkg_filer[!grepl("kartlagte_naturtyper", gpkg_filer)]
+
+# Les relevante lag
+data_list <- lapply(gpkg_filer, function(fil) {
+  
+  # Finn lag i filen
+  layers <- st_layers(fil)$name
+  
+  # Velg bort lag som viser kartlagte naturtypers og arter
+  layers <- layers[!grepl("MI|HB13|hb13|store_hule_eiker|arter|ar5", layers) ]
+  
+  if (length(layers) == 0) return(NULL)
+  
+  # Les lagene
+  objs <- lapply(layers, function(lyr) {
+    message("Leser: ", basename(fil), " - ", lyr)
+    st_read(fil, layer = lyr, quiet = TRUE)
+  })
+  
+  # Sett kriteriekartnavn på lagene
+  names(objs) <- layers
+  objs
+})
+
+# Flatten liste (liste av lister → én liste)
+data_list <- unlist(data_list, recursive = FALSE)
+
+# Fjern NULL
+data_list <- Filter(Negate(is.null), data_list)
+
+
+
+#
+
+# Add layer name and combine all polygon layers
+target_crs <- st_crs(data_list[[1]])
+
+layers <- lapply(data_list, function(x) {
+  x <- st_transform(x, target_crs)
+  st_sf(geometry = st_geometry(x))
+})
+
+polygons <- bind_rows(
+  lapply(names(layers), function(x) {
+    layers[[x]] %>%
+      mutate(layer_name = x)
+  })
+)
+
+feltdata_kriterier <- st_join(
+  feltdata_p %>%
+  st_zm(),
+  polygons["layer_name"],
+  join = st_intersects
+) %>%
+  group_by(GlobalID) %>%
+  summarise(
+    layer_name = paste(unique(na.omit(layer_name)), collapse = ", "),
+    across(everything(), first),
+    .groups = "drop"
+  )
+
+# Eksporter for å lettere vurdere match mot GIS lagene
+openxlsx::write.xlsx(feltdata_kriterier %>% st_drop_geometry(), file = "/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Data/Feltdata/feltdata_kriterier.xlsx", colNames = TRUE)
+```
+
+```{r}
+# Vask dataene
+feltdata_vasket <- feltdata_kriterier %>%
+  mutate(
+         kriteriekart = case_when(
+           GlobalID %in% c("{AB6D0554-DF66-477A-9582-0AC877C33763}", "{F4F92BDD-538A-4AA6-8F63-AB14BF3E77BE}", "{82AA7AEB-268F-4899-A2A2-3E1CC0AA1A07}") ~ "akerholmer",
+           GlobalID %in% c("{4FA76DA3-06A7-4538-A329-CD04E4886048}",
+                           "{A2EBF4FB-E7A6-4D71-928F-4897E9444120}" # Dette punktet overlapper med edellauvskog, ikke osp i barskog. Setter som FP (TP=0) for edellauvskog
+                           ) ~ "edellauvskog",
+           GlobalID %in% c("{53C5F150-6639-4AFB-80B8-58252A3241B0}", "{8A2C6966-34B1-4DB3-A7AC-DEF72922BF62}", "{4170C5DA-27E8-484D-A990-665F0D9B604D}") ~ "eldrebarskog",
+           
+          GlobalID %in% c("{C5689F8E-E06B-4116-9ECC-83F8B09D38D2}") ~ "dammer",
+          GlobalID %in% c("{64A909BC-6FCA-45BE-ADB6-87E552401FE4}", "{ED180024-12E6-46DB-83C9-6F41F8C4B7B0}", "{92CD32AE-2132-49B2-B98F-989CC30E136A}") ~ "grofter",
+           GlobalID %in% c("{91C6A4A7-3715-47C0-93C7-6CE035295B45}", "{E2D2AB16-7626-4A8F-A2C0-12BA3579DF52}", "{EC50DB8F-B8CF-4F50-9731-9237A0A176BC}") ~ "vassdrag_kant_lavland_uten_vegetasjon",
+           
+           GlobalID %in% c("{13FD5E4F-E542-43B2-BB8F-D336989CB15D}", "{26636185-1577-4620-B3EE-EC1689D5C39B}", "{BA4B16D4-6F14-468A-B1F3-13A5642BB26B}") ~ "kantsoner_vei_natur",
+          
+           GlobalID %in% c("{4A41F6FC-E3FA-46F2-A528-E00E0DACF8D5}", "{5C61BC89-FD6C-4B06-8978-590357F95000}", "{8F93426C-7A41-45FF-A28B-8FAF6FD564AD}", "{92680BC1-2E54-4C77-B9E2-3AF7E469A463}") ~ "restaurerbar_graa_areal",
+
+
+           .default = kriteriekart
+         ),
+         feil_i_felt = NA,
+         feil_i_felt = case_when(
+           GlobalID %in% c("{E781587B-3E66-45A1-818E-748845682A1F}", # overlapper ikke med osp i barskog, men med edellauvskog. Må fjerne hele punktet
+                           "{FCC40868-B234-4CEE-BF84-19CB28FA95A2}", # overlapper ikke med osp i barskog
+                           "{F2D157CD-16A6-4633-9B5F-D5505A4BA4E3}", # usikker på hva som menes her, men virker ikke som kantsone åker
+                           "{914029C8-2ED8-45F0-BA7D-C88EAAE77AC6}", # skjønner ikke hva som er tenkt her
+                           "{D4E42868-8087-4BB7-AAC7-E59637BA68A6}", # er osp i barskog og ikke eldre barskog
+                           "{FBB20915-BBEA-4E26-B312-7E00FD20E8CF}", # noe om en demning
+                           # Alle under er kantsoner langs vassdrag som etter en ekstra kjøring av skript nå ikke overlapper med punktene mer
+                           "{040B3A1C-98FB-41B9-9FC5-850364B5D9EF}",
+                           "{6BA42B8C-0995-4415-9DE7-6F9BC6530089}",
+                           "{92159268-29D5-4E3B-9284-84C98EE4F6C8}",
+                           "{A544CAAF-95EE-43BE-AB94-252D7AEA83E1}",
+                           "{CD8145D4-A5E6-40DE-950E-4B64959B00B5}",
+                           "{E2D2AB16-7626-4A8F-A2C0-12BA3579DF52}",
+                           "{EBD297BA-23FB-47B9-844F-957C7D00878F}",
+                           "{F7984815-5635-4C11-BB6F-C4E7692CCDDB}",
+                           "{5A37D1EC-5A4D-4F39-8C97-48805268AD90}",
+                           "{C5EB80AD-B769-4573-9241-E760DF3E2C78}",
+                           "{C9C27545-C817-4FAF-A458-14587E61F949}",
+                           # Samme med åkerholmer
+                           "{09D29F26-CA8D-489E-856A-32C2F92B394C}",
+                           "{0B522903-40F1-42B3-8576-5E1C18358CD5}",
+                           "{4818C0EA-A8BA-488E-8C36-D855BA2F6A72}",
+                           "{CC9CA9E9-562A-41F7-AE3D-4C44DEFE0AFE}",
+                           "{D6DAA2A8-EB05-4CB2-86A7-A3F82441B8C4}",
+                           "{C51C8286-42BA-4E0B-B7A3-DFDC025987F3}"
+                           ) ~ "ja",
+                      .default = feil_i_felt
+
+         ),
+         restaurerbart_validering = restaurerbart,
+         restaurerbart_validering = case_when(
+           GlobalID %in% c("{A4239412-D8BA-49E9-B2A2-12782C18A890}", "{D76BB94E-11F9-40DD-8B73-7DA36F695C6F}", "{45132164-7745-49C6-87C9-9E15BDED7AE7}") ~ "nei",
+           feil_i_felt == "ja" ~ NA,
+           
+           .default = restaurerbart_validering
+         )
+         )
+  
+```
+
+```{r}
+feltdata_vasket$restaurerbart <- trimws(feltdata_vasket$restaurerbart)
+
+feltdata_p2 <- feltdata_vasket  %>%
+  # Legg til SSB ID
+  st_join(ssb1km) %>%
+  # Lag ny kolonne for riktig kart (true positive) hvor alle markert som "Restaurerbart" = Ja eller "Tja" er 1
+  mutate(restaurerbart_validering = str_trim(restaurerbart_validering, side = "left"),
+         TP = case_when(
+           is.na(restaurerbart_validering) ~ NA_real_,
+           restaurerbart_validering %in% c("ja", "tja") ~ 1,
+           TRUE ~ 0)
+    ) %>%
+
+  # Lag kolonne for FN (false negatives) og legg til kriteriekartet hvis det mangler
+  mutate(
+  FN = NA, 
+  FN = case_when(
+    GlobalID %in% c("{AE8C8A49-8C66-4EFD-A9A6-D32F99E7B791}", "{B9A51ABC-9E6F-40B4-9BCE-FC8B229C34C8}", "{166D3B24-2DE3-4119-A42B-ADC6973BE2A2}", "{FAAE61E8-2003-4358-A0C3-85F62E8E0A74}", "{3017C745-1BC9-4150-9C0F-99EB4D12C6F1}", "{A8EF51F9-4535-4A4B-968F-4D0688DB7B42}", "{E094E2C0-0315-4A8A-BD02-2BBFB7538CD6}", "{B1112581-EAFF-43E3-992A-08468FD81C50}", "{883D5116-C4ED-4D05-B1C9-FA71A51AE350}", "{8F7E46EE-D8A0-45F0-BED9-D0AFE3E75F67}", "{AD1C9E4F-BE0D-4BD8-970A-EBE511AAA0BC}", "{44BBE641-21AA-456F-8FD0-66327D5F7C95}", "{CEB9AAA1-C208-4C6A-83EE-8A74F391176E}") ~ 1,
+    
+    GlobalID %in% c("{1993C735-6ECE-4681-8F30-13E74BD174F1}", "{502931C9-2407-4661-A3AF-C5CF3637199B}") ~ 0,
+  .default=FN), 
+  
+  
+  kriteriekart = case_when(
+     GlobalID %in% c("{AE8C8A49-8C66-4EFD-A9A6-D32F99E7B791}", "{B9A51ABC-9E6F-40B4-9BCE-FC8B229C34C8}") ~ "Kantsoner uten vegetasjon langs vassdrag i lavlandet",
+     GlobalID %in% c("{166D3B24-2DE3-4119-A42B-ADC6973BE2A2}") ~ "Edelløvskog med forbedringspotensial",
+     GlobalID %in% c("{FAAE61E8-2003-4358-A0C3-85F62E8E0A74}") ~ "Gårdsdammer",
+      GlobalID %in% c("{3017C745-1BC9-4150-9C0F-99EB4D12C6F1}") ~ "Osp i barskog",
+     GlobalID %in% c("{A8EF51F9-4535-4A4B-968F-4D0688DB7B42}", "{E094E2C0-0315-4A8A-BD02-2BBFB7538CD6}") ~ "Naturlige dammer",
+     GlobalID %in% c("{B1112581-EAFF-43E3-992A-08468FD81C50}", "{883D5116-C4ED-4D05-B1C9-FA71A51AE350}", "{8F7E46EE-D8A0-45F0-BED9-D0AFE3E75F67}") ~ "Grå arealer ute av bruk",
+
+     .default=kriteriekart  
+     
+  )) %>%
+  # Hvis FN = 1 så skal TP være NA
+  mutate(TP = ifelse(FN>0 & !is.na(FN), NA, TP))
+
+```
+
+Eksporter vaskede feltdata
+
+```{r}
+
+temp_file <- "~/Mounts/scratch/tmp_ida/gpkg/restaurerbarnatur_punkter_vasket_2026.gpkg" 
+final_file <- "/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Data/Feltdata/restaurerbarnatur_punkter_vasket_2026.gpkg"
+
+st_write(feltdata_p2, temp_file, layer = "punkter", append=F)
+
+file.copy(temp_file, final_file, overwrite = TRUE)
+
+```
+
+Vask dataene så videre for validering og eksporter
+
+Det er også registrert en del punkter utenfor rutene. Bruker kriteriekartene for å finne ut om punktet er en TP eller en FN.
+
+```{r}
+
+feltdata_p3 <-feltdata_p2 %>%
+  # Hvis valruter id er NA, fjern rad
+  filter(!is.na(SSBID)) %>%
+  # Hvis TP er NA, fjern rad
+  filter(!is.na(TP)) %>%
+  # Fjern de som nå mangler kriteriekart ettersom de da ikke inneholder informasjon som trengs til å beregne treffsikkerhet i kartene
+    filter(!is.na(kriteriekart))
+
+
+```
+
+```{r}
+# Eksporter
+temp_file <- "~/Mounts/scratch/tmp_ida/gpkg/restaurerbarnatur_validering_2026.gpkg" 
+final_file <- "/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Data/Validering/2026/restaurerbarnatur_validering_2026.gpkg"
+
+st_write(feltdata_p3, temp_file, layer = "punkter", append=F)
+
+file.copy(temp_file, final_file, overwrite = TRUE)
+```
+
+## Feltdata 2025
+
+```{r}
+gpkg <- "/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Data/Validering/2025/Feltobservasjoner_2025.gpkg"
+layers <- st_layers(gpkg)$name
+
+feltdata_25 <- setNames(
+  lapply(layers, \(x) st_read(gpkg, layer = x, quiet = TRUE)),
+  layers
+)
+
+```
+
+### Vask data
+
+Slå sammen alle kommunene
+
+```{r}
+feltdata_25s <- bind_rows(feltdata_25, .id = "kommune") %>%
+  # Fjern NA og "u"
+  filter(!(is.na(Kriteriekart) | Kriteriekart == "u" | Kriteriekart == ""))
+
+```
+
+```{r}
+feltdata_25s <- feltdata_25s %>%
+  mutate(
+    Kriteriekart = recode(
+      Kriteriekart,
+      "1"  = "Grøfter i myr og skog",
+      "2"  = "Eldre barskog med forbedringspotensial",
+      "3"  = "Edelløvskog med forbedringspotensial",
+      "4"  = "Osp i barskog",
+      "5"  = "Kantsoner mellom vei og natur",
+      "6"  = "Kantsoner uten vegetasjon langs vassdrag i lavlandet",
+      "7"  = "Kantsoner langs åker",
+      "8"  = "Bekkeåpninger",
+      "9"  = "Gårdsdammer",
+      "10" = "Naturlige dammer",
+      "11" = "Åkerholmer med forbedringspotensial",
+      "12" = "Hule og store eiker i gjengroing",
+      "13" = "Andre kartlagte naturtyper med forbedringspotensial",
+      "14" = "Grå arealer ute av bruk"
+    )
+  )
+```
+
+Overlapp feltdata 2025 med 1 km rutenett for å kunne senere kjøre statistikk per rute hvis flere punkter i samme rute.
+
+```{r}
+
+# Finn overlapp
+feltdata_25ssb <- feltdata_25s %>%
+  st_join(ssb1km)
+```
+
+Hent ut anbefalingene om restaurering
+
+```{r}
+feltdata_25ssb <- feltdata_25ssb %>%
+  mutate(Anbefaling1 = substr(Descriptio, 1, 3),
+         Anbefaling2 = substr(Kommentar, 1, 3),
+         Anbefaling3 = substr(Comments, 1, 3),
+         Anbefaling = coalesce(Anbefaling1, Anbefaling2, Anbefaling3))
+```
+
+Ullensaker mangler sine anbefalinger, så henter ut disse fra et prosessert kartlag.
+
+```{r}
+feltdata_ullensaker_2025 <- st_read("/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2025/Leveranser/Ullensaker/Ullensaker.gdb", layer="fcFeltObservasjoner") %>%
+  st_drop_geometry() %>%
+  select(GlobalID, Anbefaling_ullen=Anbefaling)
+
+feltdata_25ssb2 <- feltdata_25ssb %>%
+  left_join(feltdata_ullensaker_2025) %>%
+  mutate(Anbefaling = coalesce(Anbefaling, Anbefaling_ullen)) %>%
+  select(-c(Anbefaling1:Anbefaling_ullen)) %>%
+  mutate(Anbefaling = tolower(Anbefaling),
+         Anbefaling = str_remove_all(Anbefaling, "[,.\\s]"),
+         Anbefaling = case_when(
+           Anbefaling %in% c("nja", "unø") ~ "tja",
+           Anbefaling == "nej" ~ "nei",
+           .default = Anbefaling
+         ))
+
+```
+
+Klargjør dataene for analyser
+
+```{r}
+feltdata_25k <- feltdata_25ssb2 %>%
+  rename(kriteriekart = Kriteriekart,
+         restaurerbart = Anbefaling,
+         geometry = geom) %>%
+  # Lag ny kolonne for riktig kart (true positive) hvor alle markert som "Restaurerbart" = Ja eller "Tja" er 1
+  mutate(TP = ifelse(restaurerbart %in% c("ja","tja"), 1, 0),
+         year = "2025") %>%
+  select(-c(CreationDa: Descriptio, OBJECTID:Comments))
+
+```
+
+## Slå sammen 2025 og 2026
+
+```{r}
+feltdata_2026 <- st_read("/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Data/Validering/2026/restaurerbarnatur_validering_2026.gpkg") %>%
+  mutate(year = "2026") %>%
+  rename(geometry = geom)
+
+feltdata_alle <- bind_rows(feltdata_2026, feltdata_25k) %>%
+  # Fiks på navnene
+    mutate(
+    kriteriekart = str_trim(kriteriekart, side = "left"),
+    kriteriekart = recode(
+      kriteriekart,
+      "vassdrag_kant_lavland_uten_vegetasjon" = "Unvegetated riparian strips",
+      "Kantsoner uten vegetasjon langs vassdrag i lavlandet" = "Unvegetated riparian strips",
+      
+      "akerholmer" = "Field islets",
+      "Åkerholmer med forbedringspotensial" = "Field islets",
+      
+      "grofter" = "Drainage ditches in forests and mires",
+      "Grøfter i myr og skog" = "Drainage ditches in forests and mires",
+      
+      "eldrebarskog" = "Mature coniferous forest",
+      "Eldre barskog med forbedringspotensial" = "Mature coniferous forest",
+      
+      "kantsoner_vei_natur" = "Roadside buffer strips",
+      "Kantsoner mellom vei og natur" = "Roadside buffer strips",
+      
+      "edellauvskog" = "Broadleaved deciduous forest",
+      "Edelløvskog med forbedringspotensial" = "Broadleaved deciduous forest",
+      
+      "kantsoner_langs_aker" = "Field buffer strips",
+      
+      "graa_arealer" = "Impervious surfaces",
+      "restaurerbar_graa_areal" = "Impervious surfaces",
+      "Grå arealer ute av bruk" = "Impervious surfaces",
+      
+      "dammer" = "Ponds",
+      
+      "osp_i_barskog" = "Aspen in coniferous forest",
+      "Osp i barskog" = "Aspen in coniferous forest"
+    )
+  )
+```
+
+Eksporter
+
+```{r}
+
+# Eksporter
+temp_file <- "~/Mounts/scratch/tmp_ida/gpkg/restaurerbarnatur_validering_25_26.gpkg" 
+final_file <- "/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Data/Validering/2026/restaurerbarnatur_validering_25_26.gpkg"
+
+st_write(feltdata_alle, temp_file, layer = "punkter", append=F)
+
+file.copy(temp_file, final_file, overwrite = TRUE)
+```

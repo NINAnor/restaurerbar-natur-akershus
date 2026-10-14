@@ -78,7 +78,7 @@ artsobs_fremmed_sp <- artsobs_fremmed %>%
   )
 
 # Eksporter
-artsobs_fremmed_sp %>% st_write("/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Data/Artsobservasjoner/Fremmedarter/artsobs_fremmed.csv")
+artsobs_fremmed_sp %>% st_write("/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Data/Artsobservasjoner/Fremmedarter/artsobs_fremmed.csv", delete_dsn = TRUE)
 ```
 
 ## Gran
@@ -128,7 +128,7 @@ artsobs_RLarter_sp <- artsobs_RLarter %>%
   )
 
 # Eksporter
-artsobs_RLarter_sp %>% st_write("/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Data/Artsobservasjoner/Roedlistede arter/artsobs_RLarter.csv")
+artsobs_RLarter_sp %>% st_write("/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Data/Artsobservasjoner/Roedlistede arter/artsobs_RLarter.csv", delete_dsn = TRUE)
 ```
 
 ## Indikatorarter
@@ -155,7 +155,7 @@ artsobs_barskog_sp <- artsobs_barskog %>%
   )
 
 # Eksporter
-artsobs_barskog_sp %>% st_write("/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Data/Artsobservasjoner/Indikatorarter/artsobs_barskog.csv")
+artsobs_barskog_sp %>% st_write("/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Data/Artsobservasjoner/Indikatorarter/artsobs_barskog.csv", delete_dsn = TRUE)
 ```
 
 ### Osp
@@ -180,7 +180,7 @@ artsobs_osp_sp <- artsobs_osp %>%
   )
 
 # Eksporter
-artsobs_osp_sp %>% st_write("/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Data/Artsobservasjoner/Indikatorarter/artsobs_osp.csv")
+artsobs_osp_sp %>% st_write("/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Data/Artsobservasjoner/Indikatorarter/artsobs_osp.csv", delete_dsn = TRUE)
 ```
 
 ### Edellauvskog
@@ -205,7 +205,7 @@ artsobs_edellauv_sp <- artsobs_edellauv %>%
   )
 
 # Eksporter
-artsobs_edellauv_sp %>% st_write("/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Data/Artsobservasjoner/Indikatorarter/artsobs_edellauv.csv")
+artsobs_edellauv_sp %>% st_write("/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Data/Artsobservasjoner/Indikatorarter/artsobs_edellauv.csv", delete_dsn = TRUE)
 ```
 
 ### Eng
@@ -230,5 +230,5 @@ artsobs_eng_sp <- artsobs_eng %>%
   )
 
 # Eksporter
-artsobs_eng_sp %>% st_write("/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Data/Artsobservasjoner/Indikatorarter/artsobs_eng.csv")
+artsobs_eng_sp %>% st_write("/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Data/Artsobservasjoner/Indikatorarter/artsobs_eng.csv", delete_dsn = TRUE)
 ```

@@ -1,0 +1,162 @@
+---
+title: "Kommunedata"
+format: html
+---
+
+```{r, echo=FALSE, results='hide'}
+
+# Sett tegnkodingen for teksthåndtering til norsk bokmål med UTF-8-encoding
+Sys.setlocale("LC_CTYPE", "nb_NO.UTF-8")
+
+# Last inn pakker
+packages <- c("readxl","dplyr","readr","sf", "mapview", "terra", "stringr", "tidyr")
+sapply(packages, require, character.only = TRUE)
+
+```
+
+Lager geopackages med dataene fra kommunene.
+
+## Frogn
+
+```{r}
+datpath <- "/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Data/Kommuner/Frogn/OneDrive_1_3-27-2026"
+outpath <- "/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Data/Kommuner/Frogn/Data"
+
+# Pakk ut alle mapper
+zipfiler <- list.files(datpath, pattern = "\\.zip$", full.names = TRUE)
+
+# Pakk ut alle
+lapply(zipfiler, function(z) {
+  unzip(z, exdir = outpath)
+})
+
+# Last inn all data
+filer <- list.files(outpath, pattern = "\\.gdb$", full.names = TRUE)
+
+# Les inn alle
+data_liste <- lapply(filer, st_read)
+
+```
+
+Er noen problemer med lagene. Fikser dette før de eksporteres.
+
+```{r}
+data_liste2 <- lapply(data_liste, function(x) {
+  st_zm(x, drop = TRUE, what = "ZM")
+})
+
+
+```
+
+Eksporter data.
+
+```{r}
+
+temp_file <- "~/Mounts/scratch/tmp_ida/gpkg/kommunedata_frogn.gpkg" 
+final_file <- "/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Tilleggsdata/kommunedata_frogn.gpkg" 
+
+st_write(data_liste2[[1]], temp_file, layer = "amfibiedammer", append=F)
+st_write(data_liste2[[2]], temp_file, layer = "hensynssone_kantveg", append=F)
+st_write(data_liste2[[3]], temp_file, layer = "naturdata_lokaltviktig", append=F)
+st_write(data_liste2[[4]], temp_file, layer = "vilttrekk", append=F)
+
+file.copy(temp_file, final_file, overwrite = TRUE)
+```
+
+## Lunner
+
+```{r}
+
+path <- "/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Data/Kommuner/Lunner/kartfiler_20260325"
+
+# Last inn all data
+filer <- list.files(path, pattern = "\\.shp$", full.names = TRUE)
+
+# Les inn alle
+data_liste <- lapply(filer, st_read)
+```
+
+Eksporter data.
+
+```{r}
+temp_file <- "~/Mounts/scratch/tmp_ida/gpkg/kommunedata_lunner.gpkg" 
+final_file <- "/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Tilleggsdata/kommunedata_lunner.gpkg" 
+
+st_write(data_liste[[1]], temp_file, layer = "ifn_soner", append=F)
+st_write(data_liste[[2]], temp_file, layer = "oek_verdi", append=F)
+
+file.copy(temp_file, final_file, overwrite = TRUE)
+```
+
+## Nesodden
+
+```{r}
+datpath <- "/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Data/Kommuner/Nesodden"
+outpath <- "/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Data/Kommuner/Nesodden/Data"
+
+# Pakk ut alle mapper
+zipfiler <- list.files(datpath, pattern = "\\.zip$", full.names = TRUE)
+
+# Pakk ut alle
+lapply(zipfiler, function(z) {
+  unzip(z, exdir = outpath)
+})
+
+# Last inn all data
+filer <- list.files(outpath, pattern = "\\.shp$", full.names = TRUE)
+
+# Les inn alle
+data_liste <- lapply(filer, st_read)
+
+# Legg på navn
+names(data_liste) <- tools::file_path_sans_ext(basename(filer))
+```
+
+Er noen problemer med lagene. Fikser dette før de eksporteres.
+
+```{r}
+data_liste2 <- lapply(data_liste, function(x) {
+  st_zm(x, drop = TRUE, what = "ZM")
+})
+
+
+```
+
+Eksporter data.
+
+```{r}
+
+temp_file <- "~/Mounts/scratch/tmp_ida/gpkg/kommunedata_nesodden.gpkg" 
+final_file <- "/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Tilleggsdata/kommunedata_nesodden.gpkg" 
+
+st_write(data_liste[[1]], temp_file, layer = "amfibiedammer_restaurerte", append=F)
+st_write(data_liste[[9]], temp_file, layer = "amfibiedammer_randsone", append=F)
+# Dropper nr 4 ettersom det viser det samme som lag nr 9
+
+# Dropper nr 2 ettersom det viser kun grensene for lag nr 3
+st_write(data_liste[[3]], temp_file, layer = "blomsterengskjøtsel", append=F)
+st_write(data_liste[[5]], temp_file, layer = "kommunale_eiendommer", append=F)
+
+st_write(data_liste[[6]], temp_file, layer = "lokalt_viktig_natur_NMBU", append=F)
+st_write(data_liste[[7]], temp_file, layer = "lokalt_viktig_natur_uMI", append=F)
+st_write(data_liste[[8]], temp_file, layer = "GRUK_restaurert_Persteila", append=F)
+
+file.copy(temp_file, final_file, overwrite = TRUE)
+```
+
+## Rælingen
+
+Kun én fil som er relevant å bruke.
+
+```{r}
+path <- "/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Data/Kommuner/Rælingen/Hule eiker/HULE-EIKER.shp"
+
+dat <- st_read(path)
+
+temp_file <- "~/Mounts/scratch/tmp_ida/gpkg/kommunedata_raelingen.gpkg" 
+final_file <- "/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Tilleggsdata/kommunedata_raelingen.gpkg" 
+
+st_write(dat, temp_file, layer = "hule_eiker", append=F)
+
+file.copy(temp_file, final_file, overwrite = TRUE)
+```
