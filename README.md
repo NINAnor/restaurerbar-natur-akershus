@@ -4,7 +4,7 @@ Akershus fylkeskommune har i samarbeid med noen kommuner satt et mål om å øke
 
 For hver kommune er formålet å utvikle digitale kartgrunnlag som viser natur med restaureringspotensial. Prosjektet utnytter eksisterende kart for å gi en oversikt over restaurerbar natur i Akershus og, så langt det går med de kartdataene som er tilgjengelige, identifisere graden av forringelse og restaureringspotensial.
 
-Dette repoet inneholder R-skriptene (Quarto) for andre del av prosjektet (2026), som er ledet av Norsk institutt for naturforskning (NINA). Metodene er beskrevet nærmere i NINA-rapportene til hver kommune (2026). Metodikken bygger på arbeidet i Nordre Follo (Skrindo mfl. 2023) og første del av prosjektet (2025).
+Dette repoet inneholder R-skriptene (Quarto) for andre del av prosjektet (2026), som er ledet av Norsk institutt for naturforskning (NINA). Metodene er beskrevet nærmere i NINA-rapportene til hver kommune, se for eksempel Mienna et al. (2026). Metodikken bygger på arbeidet i Nordre Follo (Skrindo et al. 2023) og første del av prosjektet (for eksempel Skrindo et al. 2025).
 
 ## Kriteriekart
 
@@ -53,7 +53,7 @@ Flere skript bruker resultater fra andre skript. Kjør dem i denne rekkefølgen:
 - **R-pakker:** arrow, DBI, dplyr, duckdb, glue, igraph, lwgeom, mapview, NinaR, nngeo, purrr, readr, readxl, rgrass, sf, stringr, terra, tidyr og tidyverse. NinaR er NINAs interne pakke og brukes til å koble til GRASS.
 - **GRASS GIS** med rgrass, for `kantsoner_aker.qmd` og `neighborhood_analysis_invasive.qmd`. Skriptene kobler til NINAs GRASS-oppsett med `NinaR::grassConnect()`.
 - **Tilgang til NINAs servere.** Alle filstier er skrevet fullt ut og peker til prosjektområdet (`/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/`), NINAs felles kartdata (`/data/R/GeoSpatialData/`) og NINAs interne datalager (S3). Utenfor NINA må stiene endres og dataene lastes ned på nytt fra kildene under.
-- **Midlertidig mappe.** De fleste skriptene skriver først til en midlertidig mappe (`~/Mounts/scratch/tmp_ida/gpkg/` eller `/data/scratch/tmp_ida/gpkg/`) og kopierer deretter til prosjektområdet, fordi det er ustabilt å skrive GeoPackage direkte til nettverksdisken. Andre brukere må endre denne stien.
+- **Midlertidig mappe.** De fleste skriptene skriver først til en midlertidig mappe (`/data/scratch/tmp_ida/gpkg/`) og kopierer deretter til prosjektområdet, fordi det er ustabilt å skrive GeoPackage direkte til nettverksdisken. Andre brukere må endre denne stien.
 
 ## Datakilder
 
@@ -61,30 +61,30 @@ Data som er lastet ned eller laget i prosjektet, ligger under `2026/Data/` på p
 
 | Data | Dataeier og kilde | Brukes i |
 |---|---|---|
-| Artsobservasjoner (karplanter, sopp, lav og moser fra og med 2000) | Artsdatabanken (Artskart). Lastet ned 27.02.2026. | Kartgrunnlag/artsobservasjoner og de fleste kriteriekart |
+| Artsobservasjoner (karplanter, sopp, lav og moser fra og med 2000) | Artsdatabanken (Artskart) | Kartgrunnlag/artsobservasjoner og de fleste kriteriekart |
 | Fremmede karplanter med økologisk effekt | Artsdatabanken (Fremmedartsbasen 2023). Begrenset tilgang. | Kartgrunnlag/artsobservasjoner |
 | Artslister over indikatorarter for eldre barskog, osp, edelløvskog og enger | NINA. Listene står i vedlegget til NINA-rapportene. | Kartgrunnlag/artsobservasjoner |
-| Artslister over indikatorarter for eik | Sverdrup-Thygeson mfl. (2010) og Dahlberg & Stokland (2004) | hule_store_eiker |
-| Kartlagte naturtyper etter HB13 og MI, utvalgte naturtyper og naturtyper med KU-verdi | Miljødirektoratet (Naturbase). Lastet ned 27.02.2026. | Kartgrunnlag/HB13 og de fleste kriteriekart |
-| Faktaark for HB13-lokaliteter | Miljødirektoratet (Naturbase). Hentet fra faktaarkene av NINA og lagret i NINAs interne datalager (S3). | Kartgrunnlag/HB13 |
+| Artslister over indikatorarter for eik | Sverdrup-Thygeson et al. (2010) og Dahlberg & Stokland (2004) | hule_store_eiker |
+| Kartlagte naturtyper etter HB13 og MI, utvalgte naturtyper og naturtyper med KU-verdi | Miljødirektoratet (Naturbase) | Kartgrunnlag/HB13 og de fleste kriteriekart |
+| Faktaark for HB13-lokaliteter | Miljødirektoratet (Naturbase) | Kartgrunnlag/HB13 |
 | Koder og navn for HB13-naturtyper (`HB13_koder.xlsx`) | Hentet fra DN-håndbok 13 (Direktoratet for naturforvaltning 2007) | kartlagte_naturtyper |
 | Naturtiltak | Miljødirektoratet (tiltak fra tilskuddsordningene, hentes direkte fra kartjenesten) | Kartgrunnlag/naturtiltak |
 | Myrrestaurering | Statsforvalteren. Begrenset tilgang. | Kartgrunnlag/naturtiltak |
 | Fjellområder | Miljødirektoratet (modellert fjellareal) | kantsoner_vassdrag |
 | FKB-Vann | Kartverket | kantsoner_vassdrag, bekkeapninger |
 | N50 (veier) | Kartverket | kantsoner_vei_natur |
-| Høydedata (DTM10 og strømningsakkumulering) | Kartverket. Bearbeidet i 2025-delen av prosjektet (`2025/Kartlegging/Data_Akershus/dtm10.gdb`). | akerholmer |
+| Høydedata (DTM10 og strømningsakkumulering) | Kartverket | akerholmer |
 | Trehøydemodell (vegetasjon over eller under 2 m) | Laget fra høydedata (Kartverket) i Google Earth Engine, se lenke i `kantsoner_vassdrag.qmd` | kantsoner_vassdrag, kantsoner_vei_natur |
 | Fylkes- og kommunegrenser | Kartverket | flere skript |
 | SR16 V treslag | NIBIO | edellauvskog, eldre_barskog, osp_i_barskog |
-| SR16-beta bestandsalder | NIBIO. Bearbeidet i 2025-delen av prosjektet (`2025/Kartlegging/Data_Akershus/SR16_utm32.gdb`). | edellauvskog |
+| SR16-beta bestandsalder | NIBIO | edellauvskog |
 | Naturskogsnærhet og hogstflater | NIBIO (naturskogkartet) | Kartgrunnlag/hogstflater, eldre_barskog |
 | Grå arealer | NIBIO | de fleste kriteriekart, restaurerbar_graa_areal, bekkeapninger |
 | AR5 (arealressurskart) | NIBIO. Begrenset tilgang (krever Norge digitalt-bruker). | akerholmer, grofter_myr_skog, hule_store_eiker, kantsoner, bekkeapninger |
 | Jordkvalitet | NIBIO | kantsoner_aker |
-| Grøftekart (KI-modellerte grøfter) | NINA (Jansson mfl. 2024). Begrenset tilgang, kontakt forfatterne. | grofter_myr_skog |
-| Pollinatorhabitat | NINA (Sydenham mfl. 2023) | kantsoner_vei_natur, kantsoner_aker |
-| Gårdsdammer og naturlige dammer | NINA. Bygger på NINAs prediksjonsmodell for gårdsdammer (Bakkestuen mfl. 2025), med flybildetolking og klassifisering av ekspert. | dammer |
+| Grøftekart (KI-modellerte grøfter) | NINA (Jansson et al. 2024). Begrenset tilgang, kontakt forfatterne. | grofter_myr_skog |
+| Pollinatorhabitat | NINA (Sydenham et al. 2023) | kantsoner_vei_natur, kantsoner_aker |
+| Gårdsdammer og naturlige dammer | NINA. Bygger på NINAs prediksjonsmodell for gårdsdammer (Bakkestuen et al. 2025), med flybildetolking og klassifisering av ekspert. | dammer |
 | Skoler (grunnskoler og videregående skoler) | Geonorge | Kartgrunnlag/skoler |
 
 ## Utdata
@@ -97,14 +97,16 @@ Data som er lastet ned eller laget i prosjektet, ligger under `2026/Data/` på p
 - Bakkestuen, V., Dervo, B.K., Erikstad, L., Gregersen, F., Mjelde, M., Pettersen, R., Schartau, A.K. & Velle, G. 2025. Modellering av limniske naturtyper og metode for beregning av påvirkning i ferskvann og brakkvann. NINA Rapport 2595. Norsk institutt for naturforskning.
 - Dahlberg, A. & Stokland, J. 2004. Vedlevande arters krav på substrat – sammanställning och analys av 3 600 arter. Skogsstyrelsen, Rapport 7-04.
 - Direktoratet for naturforvaltning 2007. Kartlegging av naturtyper – verdisetting av biologisk mangfold. DN-håndbok 13, 2. utgave 2006 (oppdatert 2007).
+- Mienna, I.M. et al. 2026. Kunnskapsløft om restaurerbar natur. Med en beskrivelse av ti mulige restaureringsprosjekter i Nes kommune. NINA Rapport 2813. Norsk institutt for naturforskning. https://hdl.handle.net/11250/5585200
 - Jansson, U., Bakkestuen, V., Lyngstad, A. & Mienna, I.M. 2024. Utvikling av grøftekart i myr og torvmark i Norge med hjelp av dyplæring. NINA Rapport 2443. Norsk institutt for naturforskning.
 - Skrindo, A.B., Simensen, T., Jansson, U., Bakkestuen, V., Dervo, B., Hagen, D., Mehlhoop, A.C., Museth, J. & Singsaas, F.T. 2023. Restaurerbar natur Nordre Follo. NINA Rapport 2314. Norsk institutt for naturforskning.
+- Skrindo, A.B. et al. 2025. Kunnskapsløft om restaurerbar natur. Med en beskrivelse av ti mulige restaureringsprosjekter i Lillestrøm kommune. NINA Rapport 2661. Norsk institutt for naturforskning. https://hdl.handle.net/11250/5333881
 - Sverdrup-Thygeson, A., Bratli, H., Brandrud, T.E. & Ødegaard, F. 2010. Faglig grunnlag for handlingsplan for hule eiker. NINA Rapport 631.
-- Sydenham, M.A.K., Venter, Z., Eldegard, K. mfl. 2023. The contributions of flower strips to wild bee conservation in agricultural landscapes can be predicted using pollinator habitat suitability models [datasett]. Dryad. https://doi.org/10.5061/dryad.280gb5mvp
+- Sydenham, M.A.K., Venter, Z., Eldegard, K. et al. 2023. The contributions of flower strips to wild bee conservation in agricultural landscapes can be predicted using pollinator habitat suitability models [datasett]. Dryad. https://doi.org/10.5061/dryad.280gb5mvp
 
 ## Kontakt
 
 - Prosjektleder: Astrid B. Skrindo (astrid.skrindo@nina.no)
 - GIS-ansvarlig: Ida Marielle Mienna (ida.mienna@nina.no)
 
-Skriptene for kantsoner, bekkeåpninger, grå arealer og nabolagsanalysen for fremmede arter er skrevet av Jenny Hansen (NINA).
+Skriptene er skrevet av Ida Marielle Mienna og Jenny Hansen.
