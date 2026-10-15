@@ -11,7 +11,7 @@ Dette repoet inneholder R-skriptene (Quarto) for andre del av prosjektet (2026),
 Kriteriekartene viser ulike typer forringet natur i Akershus som har potensial for å restaureres.
 
 | Kriteriekart | Skript |
-|----|----|
+|------------------------------------|------------------------------------|
 | Grøfter i myr og skog | `Kriteriekart/grofter_myr_skog.qmd` |
 | Eldre barskog med forbedringspotensial | `Kriteriekart/eldre_barskog.qmd` |
 | Edelløvskog med forbedringspotensial | `Kriteriekart/edellauvskog.qmd` |
@@ -29,7 +29,7 @@ Kriteriekartene viser ulike typer forringet natur i Akershus som har potensial f
 ## Mappestruktur
 
 | Mappe | Innhold |
-|----|----|
+|------------------------------------|------------------------------------|
 | `Kartgrunnlag/` | Klargjøring av inndata som brukes av flere kriteriekart (artsobservasjoner, HB13-faktaark, hogstflater og nabolagsanalyse for fremmede arter), og kart til prioritering (naturtiltak og skoler). |
 | `Kriteriekart/` | Ett skript per kriteriekart. Resultatene skrives til `2026/Kriteriekart/` på prosjektområdet. |
 
@@ -60,7 +60,7 @@ Flere skript bruker resultater fra andre skript. Kjør dem i denne rekkefølgen:
 Data som er lastet ned eller laget i prosjektet, ligger under `2026/Data/` på prosjektområdet. Data fra NINAs felles kartdata ligger under `/data/R/GeoSpatialData/`. Tilgang er «åpen» hvis ikke annet er oppgitt.
 
 | Data | Dataeier og kilde | Brukes i |
-|----|----|----|
+|------------------------|------------------------|------------------------|
 | Artsobservasjoner (karplanter, sopp, lav og moser fra og med 2000) | Artsdatabanken (Artskart) | Kartgrunnlag/artsobservasjoner og de fleste kriteriekart |
 | Fremmede karplanter med økologisk effekt | Artsdatabanken (Fremmedartsbasen 2023). Begrenset tilgang. | Kartgrunnlag/artsobservasjoner |
 | Artslister over indikatorarter for eldre barskog, osp, edelløvskog og enger | NINA. Listene står i vedlegget til NINA-rapportene. | Kartgrunnlag/artsobservasjoner |
@@ -110,3 +110,9 @@ Data som er lastet ned eller laget i prosjektet, ligger under `2026/Data/` på p
 -   GIS-ansvarlig: Ida Marielle Mienna ([ida.mienna\@nina.no](mailto:ida.mienna@nina.no){.email})
 
 Skriptene er skrevet av Ida Marielle Mienna og Jenny Hansen.
+
+## Lisens
+
+Copyright (C) 2026 Norsk institutt for naturforskning (NINA).
+
+Koden er lisensiert under GNU General Public License versjon 3, se LICENSE.
