@@ -1,0 +1,178 @@
+---
+title: "Kantsoner mellom vei og natur"
+author: "Jenny Hansen"
+format: html
+editor: visual
+---
+
+Load required libraries
+
+```{r echo=FALSE}
+library(sf)
+library(terra)
+library(dplyr)
+library(mapview)
+library(igraph)
+```
+
+Import data
+
+```{r echo=FALSE}
+
+# veier
+veier <- st_read("/data/R/GeoSpatialData/Topography/Norway_N50/Original/N50 Kartdata FGDB-format/Basisdata_32_Akershus_25832_N50Kartdata_FGDB/Basisdata_32_Akershus_25832_N50Kartdata_FGDB.gdb", layer = "N50_Samferdsel_senterlinje") %>% 
+  filter(typeveg == "enkelBilveg",
+         vegkategori != "P") %>%  # remove private roads
+  mutate(road_id = row_number()) # assign unique id (missing objectid)
+
+# natural land cover (arealtype is skog, åpenfastmark, myr or ferskvann)
+natur <- st_read("/data/R/GeoSpatialData/Topography/Norway_FKB/Original/FKB-AR5 FGDB-format/Basisdata_32_Akershus_25832_FKB-AR5_FGDB.gdb", layer = "fkb_ar5_omrade") %>% 
+  filter(arealtype %in% c("30", "50", "60", "81"))
+
+# Canopy Height Model classification was done in Google Earth Engine:
+# https://code.earthengine.google.com/bae90ed14775ac4adac711981634e6e4
+chm_bin <- rast("/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Data/Kantsoner/akershus_chm_binary_10m.tif")
+
+# Pollinator prediction raster (from Markus)
+poll <- rast("/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Data/Kantsoner/polliland_akershus.tif")
+
+# invasive species
+invasive <- rast("/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Data/Kantsoner/invasive_neighborhood.tif")
+```
+
+Find road segments that overlap natural land cover types
+
+```{r echo=FALSE}
+
+# switch to GEOS engine for single-sided buffers
+sf_use_s2(FALSE)
+
+# create left & right buffers (20 m)
+veier_left  <- st_buffer(veier,  dist = 20,  singleSide = TRUE)
+veier_right <- st_buffer(veier,  dist = -20, singleSide = TRUE)
+
+# combine
+veier_left$side  <- "left"
+veier_right$side <- "right"
+
+veier_buf <- rbind(veier_left, veier_right)
+
+# intersect with natural areas
+vei_nat_part <- st_intersection(veier_buf, natur)
+
+# calculate area of overlap
+vei_nat_area <- vei_nat_part %>%
+  mutate(area_nat = st_area(.)) %>%
+  group_by(road_id, side) %>%
+  summarise(area_nat = sum(area_nat), .groups = "drop")
+
+# total buffer area
+vei_total_area <- veier_buf %>%
+  mutate(area_total = st_area(.)) %>%
+  st_drop_geometry()
+
+# proportion of road along nature
+vei_prop <- vei_total_area %>%
+  left_join(vei_nat_area %>% st_drop_geometry(), by = c("road_id", "side")) %>%
+  mutate(area_nat = ifelse(is.na(area_nat), 0, area_nat),
+         prop_nat = as.numeric(area_nat) / as.numeric(area_total))
+
+# filter for segments with at least 75% natural
+veier_sel <- veier_buf %>%
+  left_join(vei_prop, by = c("road_id", "side")) %>%
+  filter(prop_nat >= 0.75)
+
+```
+
+Find areas that overlap CHM raster with '1' values- less than 2 m vegetation
+
+```{r echo=FALSE}
+
+veier_natur_vect <- vect(veier_sel)
+
+# get proportion of cells with <= 2 m vegetation
+veier_natur_vect$veg_low_prop <- terra::extract(chm_bin, veier_natur_vect, fun = mean, na.rm = TRUE)[,2]
+
+# filter for those that are at least 75% low vegetation
+veier_filter <- veier_natur_vect %>% st_as_sf() %>% filter(veg_low_prop > 0.75)
+
+```
+
+Add columns for pollinators and invasive species
+
+```{r echo=FALSE}
+
+veier_filter_vect <- vect(veier_filter)
+
+# extract mean pollinator
+res_poll <- terra::extract(poll, veier_filter_vect, fun = mean, na.rm = TRUE)
+veier_filter_vect$mean_poll <- res_poll[,2]
+
+# extract mean invasive
+res_inv <- terra::extract(invasive, veier_filter_vect, fun = mean, na.rm = TRUE)
+veier_filter_vect$mean_inv <- res_inv[,2]
+
+# convert to sf
+veier_sel_sf <- st_as_sf(veier_filter_vect)
+
+mapview(veier_sel_sf, zcol = "mean_poll")
+
+range(veier_sel_sf$mean_poll, na.rm = TRUE) # 1.512562 12.656886
+```
+
+Find suitable areas
+
+```{r echo=FALSE}
+
+# define some rubric of mean poll value >= X 
+hist(veier_sel_sf$mean_poll)
+summary(veier_sel_sf$mean_poll) # median 4.7, mean 5
+
+# use median value and greater than 0 invasive spp.
+veier_suitable <- veier_sel_sf %>% 
+  filter(#mean_poll >= 4.7, # not relevant
+         mean_inv > 0)
+
+# identify intersecting polygons
+nb <- st_intersects(veier_suitable)
+
+# convert to graph
+g <- graph_from_adj_list(nb)
+
+# find connected components
+groups <- components(g)$membership
+
+# dissolve using a weighted mean for value column
+veier_dissolved <- veier_suitable %>% 
+  mutate(area = as.numeric(st_area(.))) %>% 
+  mutate(group_id = groups) %>% 
+  group_by(group_id) %>% 
+  summarise(mean_inv = weighted.mean(mean_inv, area, na.rm = TRUE)) %>% 
+  mutate(area = as.numeric(st_area(.)))
+
+```
+
+Filter for areas 1000 sq. m or larger
+
+```{r echo=FALSE}
+
+veier_final <- veier_dissolved %>% 
+  filter(area >= 1000)
+mapview(veier_final, zcol = "mean_inv")
+
+```
+
+Export data
+
+```{r echo=FALSE}
+
+# write to scratch temporarily and copy to P drive
+out_gpkg <- "/data/scratch/tmp_ida/gpkg/kantsoner_vei_natur_v4.gpkg"
+st_write(veier_final, out_gpkg, layer = "kantsoner_vei_natur", append = FALSE)
+
+file.copy(
+  from = out_gpkg,
+  to = "/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Kriteriekart/kantsoner_vei_natur_v4.gpkg",
+  overwrite = TRUE)
+
+```

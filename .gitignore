@@ -4,9 +4,6 @@
 .Ruserdata
 .RDataTmp
 
-# Bekkeåpninger er ikke ferdig og skal ikke på GitHub
-Kriteriekart/bekkeapninger*
-
 # Rendret Quarto-output
 *.html
 *_files/
@@ -15,3 +12,8 @@ Kriteriekart/bekkeapninger*
 *.gdb/
 *.gpkg
 *.zip
+
+# Skript som ikke skal på GitHub
+Validering/
+Resultater/
+Kartgrunnlag/Kommunedata.qmd

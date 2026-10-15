@@ -1,0 +1,208 @@
+---
+title: "Kantsoner uten vegetasjon langs vassdrag i lavlandet"
+author: "Jenny Hansen"
+format: html
+editor: visual
+---
+
+Load required libraries
+
+```{r echo=FALSE}
+library(dplyr)
+library(sf)
+library(duckdb)
+library(DBI)
+library(glue)
+library(mapview)
+library(terra)
+library(igraph)
+
+```
+
+Import data
+
+```{r echo=FALSE}
+
+# Akershus boundary
+akershus <- st_read("/data/R/GeoSpatialData/AdministrativeUnits/Norway_AdministrativeUnits/Original/Norway_County/versjon2024/Administrative_enheter_fylker_2024_FGDB-format/Basisdata_32_Akershus_25832_Fylker2024_FGDB.gdb", layer = "fylke")
+
+# FKB-Vann (buffer by 10 m) 
+vassdrag <- st_read("/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Data/Kantsoner/FKB-Vann_Akershus.gpkg", layer = "fkbvann") %>% 
+  select(OBJECTID, objtype, medium) %>% 
+  filter(objtype %in% c("ElvBekk", "Elvekant", "Innsjøkant"),
+         medium != "U") %>% 
+  st_buffer(10)
+
+# Forest and myr data (AR5)
+skog_myr <- st_read("/data/R/GeoSpatialData/Topography/Norway_FKB/Original/FKB-AR5 FGDB-format/Basisdata_32_Akershus_25832_FKB-AR5_FGDB.gdb", layer = "fkb_ar5_omrade") %>% 
+  filter(arealtype %in% c(30,60)) %>% 
+  select(lokalid, arealtype) %>% 
+  rename(geom = SHAPE)
+
+# fjellområde (fra: https://nedlasting.miljodirektoratet.no/Fjellavgrensing/Fjellarealet_i_Norge.pdf)
+fjell <- st_read("/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Data/Kantsoner/Fjell_norge_publisering.gdb", layer = "Modellert_fjell_50") %>% 
+  st_transform(25832) %>% 
+  st_filter(akershus, .predicate = st_intersects) %>% 
+  st_intersection(akershus)
+
+# add CHM and remove areas with vegetation above 2 m
+# Canopy Height Model classification was done in Google Earth Engine:
+# https://code.earthengine.google.com/bae90ed14775ac4adac711981634e6e4
+chm_bin <- rast("/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Data/Kantsoner/akershus_chm_binary_10m.tif")
+```
+
+Remove vassdrag inside fjellområder
+
+```{r}
+
+# filter for features that do not intersect fjell
+v_outside_fjell <- vassdrag %>% 
+  st_filter(fjell, .predicate = st_disjoint)
+
+```
+
+Export data for out of session SQL intersection
+
+```{r}
+
+# skog
+st_write(skog_myr, "/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Data/Kantsoner/skog_myr.shp", delete_dsn = TRUE)
+
+# buffered vassdrag outside of fjell
+st_write(v_outside_fjell, "/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Data/Kantsoner/vassdrag.shp", delete_dsn = TRUE)
+
+```
+
+Set up db connection and parameters
+
+```{r}
+
+con <- dbConnect(duckdb())
+dbExecute(con, "INSTALL spatial; LOAD spatial;")
+
+skog_myr_path <- "/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Data/Kantsoner/skog_myr.shp"
+vass_path <- "/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Data/Kantsoner/vassdrag.shp"
+
+dbExecute(con, 
+          glue("CREATE TABLE skog_myr AS SELECT * FROM ST_Read('{skog_myr_path}')"))
+dbExecute(con, 
+          glue("CREATE TABLE vass AS SELECT * FROM ST_Read('{vass_path}')"))
+
+dbGetQuery(con, "describe skog_myr")
+dbGetQuery(con, "describe vass")
+
+```
+
+Remove vassdrag adjacent to skog and myr.
+
+```{r}
+
+query <- "
+  WITH candidate_pairs AS (
+    SELECT 
+      v.OBJECTID,
+      s.lokalid,
+      v.geom AS vass_geom,
+      s.geom AS skog_myr_geom
+    FROM vass AS v, skog_myr AS s
+    WHERE ST_Disjoint(v.geom, s.geom)
+  )
+  SELECT 
+    v.OBJECTID,
+    ST_AsWKB(v.geom) AS geom_wkb
+  FROM vass v
+  WHERE NOT EXISTS (
+    SELECT 1
+    FROM skog_myr s
+    WHERE ST_Intersects(v.geom, s.geom)
+)
+"
+
+res <- dbSendQuery(con, query)
+vass_outside_skog_myr <- dbFetch(res)
+dbClearResult(res)
+
+# convert to sf object
+geom_sfc <- st_as_sfc(vass_outside_skog_myr$geom_wkb, 
+                      crs = 25832)
+
+vass_kant_uten_skog_myr <- vass_outside_skog_myr %>%
+  select(-geom_wkb) %>%
+  mutate(geometry = geom_sfc) %>%
+  st_sf()
+```
+
+Find areas that overlap CHM raster with '1' values- less than 2 m vegetation
+
+```{r echo=FALSE}
+
+# trying zonal statistics with rasterized polygons instead
+kant_uten_skog_myr_vect <- vect(vass_kant_uten_skog_myr)
+
+# give each polygon an ID
+kant_uten_skog_myr_vect$id <- 1:nrow(kant_uten_skog_myr_vect)
+
+# rasterize polygons to match CHM
+pol_rast <- rasterize(kant_uten_skog_myr_vect, chm_bin, field = "id")
+
+# get CHM proportion over each cell
+z <- zonal(chm_bin, pol_rast, fun = "mean", na.rm = TRUE)
+
+# assign value
+kant_uten_skog_myr_vect$veg_low_prop <- 
+  z$low_veg_binary[match(kant_uten_skog_myr_vect$id, z$id)]
+
+# filter for polygons that contain at least 75% veg under 2 m
+kant_filter <- st_as_sf(kant_uten_skog_myr_vect) %>%
+  filter(veg_low_prop > 0.75)
+
+```
+
+Find suitable areas
+
+```{r echo=FALSE}
+
+# identify intersecting polygons
+nb <- st_intersects(kant_filter)
+
+# convert to graph
+g <- graph_from_adj_list(nb)
+
+# find connected components
+groups <- components(g)$membership
+
+# dissolve 
+vkus_dissolved <- kant_filter %>% 
+  mutate(group_id = groups) %>% 
+  group_by(group_id) %>% 
+  summarise(do_union = TRUE) %>% 
+  mutate(area = as.numeric(st_area(geometry)))
+```
+
+Filter for areas 1000 sq. m or larger
+
+```{r echo=FALSE}
+
+vkus_filtered <- vkus_dissolved %>% 
+  filter(area >= 1000)
+
+# filter vass kant that overlap for visualization
+vass_filter <- vassdrag |> 
+  st_filter(vkus_filtered, .predicate = st_intersects)
+
+```
+
+Export data
+
+```{r echo=FALSE}
+
+# write to scratch temporarily and copy to P drive
+out_gpkg <- "/data/scratch/tmp_ida/gpkg/vassdrag_kant_lavland_uten_vegetasjon_v4.gpkg"
+st_write(vkus_filtered, out_gpkg, layer = "kantsoner_vassdrag", append = FALSE)
+
+file.copy(
+  from = out_gpkg,
+  to = "/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Kriteriekart/vassdrag_kant_lavland_uten_vegetasjon_v4.gpkg",
+  overwrite = TRUE)
+
+```
