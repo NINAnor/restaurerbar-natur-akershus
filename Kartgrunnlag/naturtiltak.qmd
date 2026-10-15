@@ -67,7 +67,7 @@ polygon_url <- paste0(
 )
 
 polygon <- st_read(polygon_url, quiet = TRUE) %>%
-  st_transform(25833) %>%
+  st_transform(25832) %>%
   # Velg kun de innenfor Akershus
   st_filter(akershus, .predicate = st_within)
 
