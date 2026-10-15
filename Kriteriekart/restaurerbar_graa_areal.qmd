@@ -1,0 +1,66 @@
+---
+title: "Restaurerbar grå arealer"
+author: "Jenny Hansen"
+format: html
+editor: visual
+---
+
+Load required libraries
+
+```{r echo=FALSE}
+
+library(dplyr)
+library(sf)
+library(mapview)
+library(terra)
+
+```
+
+Import data
+
+```{r echo=FALSE}
+
+# Gråstruktur
+gs <- st_read("/data/R/GeoSpatialData/LandCover/Norway_Grå_Arealer_versjon1/Original/Kart over grå arealer GeoPackage-format/32_25835_graastruktur_gpkg.gpkg", layer = "GraastrukturFlate") |> 
+  st_transform(25832)
+
+```
+
+Find suitable polygons
+
+```{r echo=FALSE}
+
+# filter by compactness to get rid of areas inside of boligfelt
+# and long, strangely-shaped polygons
+# filter for 50% grey area, no buildings, and >= 1000 sq. meters
+# exclude areas that have no obvious restoration potential
+rest_bar_graa <- gs |> 
+  mutate(perimeter = as.numeric(st_length(st_boundary(geom))),
+         pa_ratio = perimeter / areal_m2,
+         compactness = 4 * pi * areal_m2 / (perimeter^2)) |> 
+  filter(compactness >= 0.4) |> # this worked better than p-a ratio
+  filter(andelgraa <= 50,
+         areal_m2 >= 1000,
+         andelbygg == 0,
+         !okosystemtype_3 %in% c("Road and rail networks and associated land",
+                                 "Sports and recreation sites", "Airports",
+                                 "Cemeteries", "Parks", "Continuous residential area",
+                                 "Continuous commercial and industrial area",
+                                 "Discontinuous residential area"))
+ mapview(rest_bar_graa, zcol = "okosystemtype_3")
+```
+
+Export map
+
+```{r echo=FALSE}
+
+# write to scratch temporarily and copy to P drive
+out_gpkg <- "/data/scratch/tmp_ida/gpkg/restaurerbar_graa_areal_v4.gpkg"
+st_write(rest_bar_graa, out_gpkg, layer = "restaurerbar_graa_areal", append = FALSE)
+
+file.copy(
+  from = out_gpkg,
+  to = "/data/P-Prosjekter2/155014_restaurerbar_natur_akershus/2026/Kriteriekart/restaurerbar_graa_areal_v4.gpkg",
+  overwrite = TRUE)
+
+```
